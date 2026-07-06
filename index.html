@@ -116,6 +116,8 @@
   .dose-row .f-dose{flex:1;}
   .dose-row .f-unit{width:76px;padding:11px 6px;}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .notewrap{margin-top:8px;}
+  .notewrap .f-note{font-size:14px;background:var(--bg);}
   .dosehelp .g3{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;}
   @media(max-width:520px){.dosehelp .g3{grid-template-columns:1fr 1fr;}}
   .verify{color:#8ff0b4;font-size:12.5px;font-weight:700;}
@@ -276,7 +278,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-06.7';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-06.8';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -383,6 +385,25 @@ function drugMg(name){
   if(l && l.mg && parseFloat(l.mg)>0) return parseFloat(l.mg);
   return null;
 }
+/** 薬剤名から説明文を引く（プリセット→覚えた薬） */
+function drugNote(name){
+  name=(name||'').trim(); if(!name) return '';
+  const p=presets.find(x=>x.name&&x.name.trim()===name); if(p && p.note) return p.note;
+  const l=learned.find(x=>x.name&&x.name.trim()===name); if(l && l.note) return l.note;
+  return '';
+}
+/** 薬剤名に説明文をひも付けて記憶（覚えた薬に保存・無ければ追加）*/
+function setDrugNote(name, note){
+  name=(name||'').trim(); if(!name) return;
+  let l=learned.find(x=>x.name&&x.name.trim()===name);
+  if(!l){ l={name, mg:'', note:''}; learned.unshift(l); }
+  l.note=note; persistLearned();
+}
+/** 説明欄が空なら記憶済みの説明を自動補完 */
+function autofillNote(r,el){
+  const nEl=el.querySelector('.f-note'); if(!nEl) return;
+  if(!nEl.value){ const nt=drugNote(r.name); if(nt){ nEl.value=nt; r.note=nt; } }
+}
 
 // ── 処方履歴（カルテ番号ごと・この端末のlocalStorageのみ）─────────────────────
 function historyGet(){ try{ return JSON.parse(localStorage.getItem('rx_history')||'{}'); }catch(_){ return {}; } }
@@ -398,7 +419,7 @@ function saveHistory(){
   if(list[0] && (list[0].lines||[]).join('|')===sig) return;  // 直近と同じ→保存しない
   list.unshift({
     savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
-    rows: rows.map(r=>({mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage,rxChecked:r.rxChecked!==false})),
+    rows: rows.map(r=>({mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage,note:r.note||'',rxChecked:r.rxChecked!==false})),
     lines
   });
   hist[key]=list.slice(0,10);
@@ -472,6 +493,7 @@ function renderPickList(query){
     const name=list[i], t=_pickTarget; if(!t) return;
     t.nameEl.value=name; t.r.name=name;
     if(t.r.mode!=='fixed') autofillMg(t.r, t.el);
+    const nt=drugNote(name), nEl=t.el.querySelector('.f-note'); if(nEl){ nEl.value=nt; t.r.note=nt; }
     updateOut(t.r, t.el); persist(); renderPreview();
     closeDrugPick();
   }));
@@ -484,7 +506,7 @@ function loadHistoryEntry(i){
   if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
   if(e.pname!=null){ setVal('pname', e.pname); _nameAuto=true; }  // 日付は今日のまま（今日出し直す用途のため上書きしない）
   rows = (e.rows||[]).map(r=>({ id:uid(), mode:r.mode||'calc', name:r.name||'', dose:r.dose||'', unit:r.unit||'T', freq:r.freq||3,
-    freqKey:r.freqKey||'TID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'' }));
+    freqKey:r.freqKey||'TID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', note:r.note||'', rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'' }));
   if(!rows.length) rows=[blankRow()];
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
@@ -494,7 +516,7 @@ function loadAll(){
   try{
     let raw = JSON.parse(localStorage.getItem('rx_learned')||'[]'); if(!Array.isArray(raw)) raw=[];
     // 旧形式（文字列の配列）→ {name,mg} に移行
-    learned = raw.map(x => typeof x==='string' ? {name:x, mg:''} : {name:(x&&x.name)||'', mg:(x&&x.mg)||''}).filter(x=>x.name);
+    learned = raw.map(x => typeof x==='string' ? {name:x, mg:'', note:''} : {name:(x&&x.name)||'', mg:(x&&x.mg)||'', note:(x&&x.note)||''}).filter(x=>x.name);
   }catch(_){ learned=[]; }
   try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
        settings = { webhook: (s.webhook && s.webhook.trim()) ? s.webhook : DEFAULT_WEBHOOK }; }
@@ -508,7 +530,7 @@ function loadAll(){
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
   rows.forEach(r=>{ if(!r.id) r.id=uid(); });
 }
-function blankRow(){ return { id:uid(), mode:'calc', name:'', dose:'', unit:'T', freq:3, freqKey:'TID', freqEvery:1, days:'', qty:'', funit:'個', usage:'', rxChecked:true, doseOpen:false, w:'', mgkg:'' }; }
+function blankRow(){ return { id:uid(), mode:'calc', name:'', dose:'', unit:'T', freq:3, freqKey:'TID', freqEvery:1, days:'', qty:'', funit:'個', usage:'', note:'', rxChecked:true, doseOpen:false, w:'', mgkg:'' }; }
 
 // ─────────────────────────────────────────────────────────────
 // DOMヘルパー
@@ -646,6 +668,9 @@ function drugEl(r){
       <span class="out f-out">—</span>
       ${calc ? '<button class="minibtn f-toggle">⚖️ 用量計算</button>' : ''}
     </div>
+    <div class="notewrap">
+      <input class="f-note" value="${esc(r.note||'')}" placeholder="薬剤の説明（処方箋に印刷・任意・薬ごとに記憶）" autocomplete="off">
+    </div>
     ${calc ? helpBlock : ''}
   `;
 
@@ -659,10 +684,11 @@ function drugEl(r){
 
   // 薬剤名（手入力／一覧から選択／消去）
   const nameEl=q('.f-name');
-  const onName=()=>{ r.name=nameEl.value; if(calc) autofillMg(r,el); updateOut(r,el); persist(); renderPreview(); };
+  const onName=()=>{ r.name=nameEl.value; if(calc) autofillMg(r,el); autofillNote(r,el); updateOut(r,el); persist(); renderPreview(); };
   nameEl.addEventListener('input', onName);
-  q('.f-clear').addEventListener('click', ()=>{ nameEl.value=''; r.name=''; updateOut(r,el); persist(); renderPreview(); nameEl.focus(); });
+  q('.f-clear').addEventListener('click', ()=>{ nameEl.value=''; r.name=''; const nE=q('.f-note'); if(nE) nE.value=''; r.note=''; updateOut(r,el); persist(); renderPreview(); nameEl.focus(); });
   q('.f-pick').addEventListener('click', ()=> openDrugPick(r, nameEl, el));
+  q('.f-note').addEventListener('input', e=>{ r.note=e.target.value; setDrugNote(r.name, e.target.value); persist(); });
   q('.f-rxchk').addEventListener('change', e=>{ r.rxChecked=e.target.checked; persist(); });
   el.querySelector('.del').addEventListener('click', ()=>removeRow(r.id));
 
@@ -703,6 +729,7 @@ function drugEl(r){
     }));
   }
 
+  autofillNote(r,el);
   updateOut(r,el);
   return el;
 }
@@ -865,12 +892,13 @@ function getClinic(){
   try{ return Object.assign({name:'',address:'',phone:''}, JSON.parse(localStorage.getItem('rx_clinic')||'{}')); }
   catch(_){ return {name:'',address:'',phone:''}; }
 }
-/** 1薬剤を処方箋用の日本語表記に：{name, usage, total} */
+/** 1薬剤を処方箋用の日本語表記に：{name, usage, total, note} */
 function rxJp(r){
   const name=(r.name||'').trim();
+  const note=(r.note||'').trim();
   if(r.mode==='fixed'){
     const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
-    return { name, usage:`${qty}${unit}${usage?'（'+usage+'）':''}`.trim(), total:'' };
+    return { name, usage:`${qty}${unit}${usage?'（'+usage+'）':''}`.trim(), total:'', note };
   }
   const doseRaw=(r.dose||'').trim();
   const unitJp=(r.unit||'T')==='T' ? '錠' : (r.unit||'');
@@ -883,9 +911,9 @@ function rxJp(r){
   let total='';
   const c=calcRow(r);
   if(parsed && c && days>0) total = `合計 ${fmtNum(c.total.toNumber())}${unitJp}`;
-  return { name, usage:usage.trim(), total };
+  return { name, usage:usage.trim(), total, note };
 }
-/** 処方箋を高解像度canvasに描画（A4縦・200dpi）。デザインは後から調整可 */
+/** 処方箋を高解像度canvasに描画（A4縦・200dpi）。フォント/レイアウトはpx値で調整可 */
 function drawPrescription(g, W, H, drugs){
   const cl=getClinic();
   const S = W/1654;                       // 基準(1654px=A4@200dpi幅)からのスケール
@@ -896,52 +924,54 @@ function drawPrescription(g, W, H, drugs){
   g.fillStyle='#111111'; g.textBaseline='alphabetic';
   let y=M;
 
-  // 病院名（右上・小）
-  g.textAlign='right'; g.font=F(15); g.fillStyle='#555';
+  // 病院名（右上）
+  g.textAlign='right'; g.font=F(19); g.fillStyle='#555';
   g.fillText(cl.name||'', W-M, y);
-  // タイトル
-  g.textAlign='center'; g.fillStyle='#111'; g.font=F(38,true);
-  y+=px(60); g.fillText('処 方 箋', W/2, y);
-  g.strokeStyle='#111'; g.lineWidth=px(1.5);
-  g.beginPath(); g.moveTo(W/2-px(120), y+px(10)); g.lineTo(W/2+px(120), y+px(10)); g.stroke();
+  // タイトル（「処方箋」はこのまま大きく）
+  g.textAlign='center'; g.fillStyle='#111'; g.font=F(40,true);
+  y+=px(66); g.fillText('処 方 箋', W/2, y);
+  g.strokeStyle='#111'; g.lineWidth=px(2);
+  g.beginPath(); g.moveTo(W/2-px(135), y+px(12)); g.lineTo(W/2+px(135), y+px(12)); g.stroke();
 
-  // 患者情報
-  g.textAlign='left'; g.font=F(17); g.fillStyle='#111';
-  y+=px(70);
+  // 患者情報（大きめ）
+  g.textAlign='left'; g.font=F(24); g.fillStyle='#111';
+  y+=px(88);
   const d=val('pdate')|| new Date().toISOString().slice(0,10);
   g.fillText(`発行日：${d}`, M, y);
-  y+=px(46);
+  y+=px(60);
   g.fillText(`カルテNo：${val('karte')||'　　　　'}`, M, y);
-  g.fillText(`患者名：${val('pname')||'　　　　'}`, M+px(560), y);
-  const wt=val('pweight'); if(wt){ y+=px(46); g.fillText(`体重：${wt} kg`, M, y); }
+  const pn=val('pname');
+  g.fillText(`患者名：${pn ? pn+' ちゃん' : '　　　　'}`, M+px(640), y);
+  const wt=val('pweight'); if(wt){ y+=px(60); g.fillText(`体重：${wt} kg`, M, y); }
 
   // 区切り
-  y+=px(34); g.strokeStyle='#333'; g.lineWidth=px(1.5);
+  y+=px(40); g.strokeStyle='#333'; g.lineWidth=px(2);
   g.beginPath(); g.moveTo(M,y); g.lineTo(W-M,y); g.stroke();
 
   // 薬剤リスト（枚数に応じて行高を調整・1ページに収める）
-  const listTop=y+px(20), listBottom=H-px(360);
-  const rowH=Math.max(px(70), Math.min(px(130), (listBottom-listTop)/Math.max(1,drugs.length)));
+  const listTop=y+px(26), listBottom=H-px(370);
+  const rowH=Math.max(px(105), Math.min(px(175), (listBottom-listTop)/Math.max(1,drugs.length)));
   drugs.forEach((r,i)=>{
     const info=rxJp(r); const ry=listTop+i*rowH;
-    g.textAlign='left'; g.fillStyle='#111'; g.font=F(19,true);
-    g.fillText(`${i+1}.　${info.name}`, M, ry+px(30));
-    g.font=F(17); g.fillStyle='#333';
-    g.fillText(`　　　${info.usage}`, M, ry+px(62));
-    if(info.total){ g.textAlign='right'; g.font=F(16); g.fillStyle='#555'; g.fillText(info.total, W-M, ry+px(62)); }
-    g.textAlign='left'; g.strokeStyle='#dddddd'; g.lineWidth=px(1);
-    g.beginPath(); g.moveTo(M, ry+rowH-px(8)); g.lineTo(W-M, ry+rowH-px(8)); g.stroke();
+    g.textAlign='left'; g.fillStyle='#111'; g.font=F(26,true);
+    g.fillText(`${i+1}.　${info.name}`, M, ry+px(40));
+    g.font=F(23); g.fillStyle='#333';
+    g.fillText(`　　　${info.usage}`, M, ry+px(80));
+    if(info.total){ g.textAlign='right'; g.font=F(21); g.fillStyle='#555'; g.fillText(info.total, W-M, ry+px(80)); g.textAlign='left'; }
+    if(info.note){ g.font=F(20); g.fillStyle='#666'; g.fillText(`　　　※ ${info.note}`, M, ry+px(116)); }
+    g.strokeStyle='#dddddd'; g.lineWidth=px(1);
+    g.beginPath(); g.moveTo(M, ry+rowH-px(10)); g.lineTo(W-M, ry+rowH-px(10)); g.stroke();
   });
 
   // フッター（病院名・住所・電話）
-  let fy=H-px(220);
-  g.strokeStyle='#333'; g.lineWidth=px(1.5);
+  let fy=H-px(230);
+  g.strokeStyle='#333'; g.lineWidth=px(2);
   g.beginPath(); g.moveTo(M,fy); g.lineTo(W-M,fy); g.stroke();
-  g.textAlign='right'; fy+=px(50); g.fillStyle='#111'; g.font=F(20,true);
+  g.textAlign='right'; fy+=px(58); g.fillStyle='#111'; g.font=F(25,true);
   g.fillText(cl.name||'', W-M, fy);
-  g.font=F(14); g.fillStyle='#444';
-  if(cl.address){ fy+=px(34); g.fillText(cl.address, W-M, fy); }
-  if(cl.phone){ fy+=px(30); g.fillText('TEL '+cl.phone, W-M, fy); }
+  g.font=F(18); g.fillStyle='#444';
+  if(cl.address){ fy+=px(42); g.fillText(cl.address, W-M, fy); }
+  if(cl.phone){ fy+=px(38); g.fillText('TEL '+cl.phone, W-M, fy); }
   g.textAlign='left';
 }
 async function generatePrescription(){
