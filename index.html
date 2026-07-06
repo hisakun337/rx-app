@@ -120,6 +120,13 @@
   .hist-lines{font-family:"SF Mono",ui-monospace,monospace;font-size:14px;color:#dbe6ff;
     line-height:1.7;margin-bottom:9px;word-break:break-all;}
 
+  #undobar{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);
+    background:#22283f;border:1px solid var(--accent);color:#fff;padding:10px 12px 10px 16px;border-radius:12px;
+    display:none;align-items:center;gap:14px;z-index:70;font-size:14px;font-weight:700;
+    box-shadow:0 8px 24px rgba(0,0,0,.55);white-space:nowrap;}
+  #undobar.show{display:flex;}
+  #undobar button{background:var(--accent);border:none;color:#fff;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:800;}
+
   #toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);
     background:#0b1a12;border:1px solid var(--accent2);color:#d9ffe9;padding:11px 18px;border-radius:999px;
     font-size:15px;font-weight:700;opacity:0;transition:.2s;pointer-events:none;z-index:60;white-space:nowrap;}
@@ -240,12 +247,17 @@
   </div>
 </div>
 
+<div id="undobar">
+  <span id="undomsg">削除しました</span>
+  <button onclick="undoDelete()">元に戻す</button>
+</div>
+
 <div id="toast"></div>
 
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-06.4';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-06.5';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -862,8 +874,35 @@ function renderLearned(){
     const i=+inp.dataset.i; if(learned[i]){ learned[i].mg=inp.value.trim(); persistLearned(); }
   }));
   box.querySelectorAll('.lrm').forEach(b=>b.addEventListener('click',()=>{
-    learned.splice(+b.dataset.i,1); persistLearned(); refreshDatalist(); renderLearned();
+    const i=+b.dataset.i, item=learned[i];
+    learned.splice(i,1); persistLearned(); refreshDatalist(); renderLearned();
+    pushUndo({type:'learned', item, index:i}, `「${item.name}」を削除`);
   }));
+}
+
+// ── 削除の取り消し（覚えた薬剤名）─────────────────────────────────────────────
+let _undoStack=[], _undoTimer=null;
+function pushUndo(entry, msg){
+  _undoStack.push(entry);
+  $('undomsg').textContent=msg;
+  $('undobar').classList.add('show');
+  clearTimeout(_undoTimer);
+  _undoTimer=setTimeout(()=>{ $('undobar').classList.remove('show'); _undoStack=[]; }, 8000);
+}
+function undoDelete(){
+  const e=_undoStack.pop();
+  if(e && e.type==='learned'){
+    learned.splice(Math.min(e.index, learned.length), 0, e.item);
+    persistLearned(); refreshDatalist(); renderLearned();
+    toast('元に戻しました');
+  }
+  if(_undoStack.length){
+    $('undomsg').textContent=`元に戻しました（あと${_undoStack.length}件）`;
+    clearTimeout(_undoTimer);
+    _undoTimer=setTimeout(()=>{ $('undobar').classList.remove('show'); _undoStack=[]; }, 8000);
+  } else {
+    $('undobar').classList.remove('show');
+  }
 }
 function saveSettings(){
   settings.webhook = $('webhook').value.trim();
