@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>処方計算 & Slack送信</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -173,6 +176,17 @@
     </div>
 
     <div class="sec">
+      <label class="lab">データのバックアップ / 復元（機種変更・保険用）</label>
+      <div style="display:flex;gap:8px;">
+        <button class="smallbtn" onclick="exportData()">書き出す</button>
+        <button class="smallbtn" onclick="document.getElementById('importFile').click()">読み込む</button>
+        <input type="file" id="importFile" accept=".json,application/json" style="display:none"
+               onchange="if(this.files[0])importData(this.files[0]); this.value='';">
+      </div>
+      <p class="hint">履歴・患者名・覚えた薬・設定はこのiPad内だけに保存されます。新しいiPadに移すときは、ここで書き出したファイルを新しいiPadの「読み込む」で復元してください。</p>
+    </div>
+
+    <div class="sec">
       <p class="hint"><b>出力の形式</b>：<br>
       <code>1/4T TID イーケプラ 15T/20days</code><br>
       ＝ 1回量T ／ 頻度 ／ 薬剤名 ／ 合計T ／ 日数。<br>
@@ -196,6 +210,8 @@
 
 <script>
 'use strict';
+
+const APP_VERSION = '2026-07-06.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -254,6 +270,7 @@ const FREQS = [
   {key:'TID', n:3, everyDays:1, jp:'1日3回'},
   {key:'QID', n:4, everyDays:1, jp:'1日4回'},
   {key:'EOD', n:1, everyDays:2, jp:'2日に1回'},
+  {key:'q3d', n:1, everyDays:3, jp:'3日に1回'},
 ];
 // Slack送信先(Webhook)は公開リポジトリに置かない（Slackが自動失効させるため）。
 // 各iPadの「⚙︎設定」に貼り付け、その端末のlocalStorageにのみ保存する。
@@ -527,7 +544,7 @@ function updateOut(r,el){
   if(!c){ out.innerHTML='<span style="color:var(--muted)">1回量・頻度・日数を入力</span>'; return; }
   const frac = c.total.d!==1 ? `（${c.total.mixed()}）` : '';
   const breakdown = (r.freqEvery>1)
-    ? `= ${doseLabel(c.dose)} × ${c.doses}回（2日に1回×${c.days}日）`
+    ? `= ${doseLabel(c.dose)} × ${c.doses}回（${r.freqEvery}日に1回×${c.days}日）`
     : `= ${doseLabel(c.dose)} × ${r.freq}回/日 × ${c.days}日`;
   out.innerHTML = `<b style="color:#fff">${fmtNum(c.total.toNumber())}T</b> ${frac} ／ ${c.days}日分　`
     + `<span style="color:var(--muted)">${breakdown}</span>`;
@@ -679,6 +696,40 @@ function presetRow(p){
   return d;
 }
 function addPreset(){ $('presetList').appendChild(presetRow({name:'',mg:''})); }
+
+// ── バックアップ（書き出し）/ 復元（読み込み）─────────────────────────────────
+const BACKUP_KEYS = ['rx_state','rx_presets','rx_learned','rx_settings','rx_history','rx_patients'];
+function exportData(){
+  const data={};
+  BACKUP_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) data[k]=v; });
+  const json = JSON.stringify({ app:'rx-app', exportedAt:new Date().toISOString(), data }, null, 2);
+  const fname = 'rx-backup-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '.json';
+  const blob = new Blob([json], {type:'application/json'});
+  // iOSの標準アプリでも保存/AirDropできるよう、共有シートを優先
+  try{
+    if(navigator.canShare){
+      const file = new File([blob], fname, {type:'application/json'});
+      if(navigator.canShare({files:[file]})){ navigator.share({files:[file], title:'処方アプリ バックアップ'}).catch(()=>{}); return; }
+    }
+  }catch(_){}
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  toast('バックアップを書き出しました');
+}
+function importData(file){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    let obj; try{ obj=JSON.parse(rd.result); }catch(_){ toast('ファイルを読めませんでした'); return; }
+    const data = obj && obj.data ? obj.data : null;
+    if(!data || typeof data!=='object'){ toast('バックアップの形式が違います'); return; }
+    if(!confirm('この端末のデータを、読み込んだバックアップで置き換えます。よろしいですか？')) return;
+    BACKUP_KEYS.forEach(k=>{ if(typeof data[k]==='string') localStorage.setItem(k, data[k]); });
+    toast('復元しました。画面を更新します…');
+    setTimeout(()=>location.reload(), 900);
+  };
+  rd.readAsText(file);
+}
 $('settings').addEventListener('click',e=>{ if(e.target===$('settings')) $('settings').classList.remove('open'); });
 $('recall').addEventListener('click',e=>{ if(e.target===$('recall')) closeRecall(); });
 
@@ -695,6 +746,20 @@ loadAll();
 render();
 refreshDatalist();
 updateRecallBtn();
+
+// 開くたびに最新版を確認し、古いキャッシュなら自動で最新へ（iPadが古いまま残らないように）
+(function(){
+  try{ if(sessionStorage.getItem('rx_upd')) return; }catch(_){ return; }
+  fetch(location.pathname + '?_=' + Date.now(), {cache:'no-store'})
+    .then(r=>r.text())
+    .then(html=>{
+      try{ sessionStorage.setItem('rx_upd','1'); }catch(_){}
+      const m = html.match(/APP_VERSION\s*=\s*'([^']+)'/);
+      if(m && m[1] && m[1] !== APP_VERSION){
+        location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]));
+      }
+    }).catch(()=>{});
+})();
 </script>
 </body>
 </html>
