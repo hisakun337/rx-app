@@ -94,6 +94,23 @@
   .recall-btn{width:100%;background:#1c3326;border:1px solid #2f7d54;color:#8ff0b4;
     border-radius:12px;padding:12px;font-size:15px;font-weight:800;}
   .recall-btn:active{background:#244433;}
+  .drug-top{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
+  .mode-seg{display:flex;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden;}
+  .mbtn{flex:1;background:transparent;border:none;color:var(--muted);padding:9px 6px;font-size:13px;font-weight:700;}
+  .mbtn.on{background:var(--accent);color:#fff;}
+  .namewrap{position:relative;}
+  .ac-list{position:absolute;left:0;right:0;top:100%;z-index:40;background:var(--card2);
+    border:1px solid var(--accent);border-top:none;border-radius:0 0 10px 10px;
+    max-height:220px;overflow-y:auto;display:none;box-shadow:0 10px 24px rgba(0,0,0,.45);}
+  .ac-item{padding:12px;font-size:15px;border-bottom:1px solid var(--line);}
+  .ac-item:active{background:var(--accent);color:#fff;}
+  .dose-row{display:flex;gap:6px;}
+  .dose-row .f-dose{flex:1;}
+  .dose-row .f-unit{width:76px;padding:11px 6px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .dosehelp .g3{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;}
+  @media(max-width:520px){.dosehelp .g3{grid-template-columns:1fr 1fr;}}
+  .verify{color:#8ff0b4;font-size:12.5px;font-weight:700;}
   .hist{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:11px;margin:8px 0;}
   .hist-head{font-size:13px;color:var(--muted);font-weight:700;display:flex;justify-content:space-between;gap:8px;margin-bottom:6px;}
   .hist-time{color:#6b7699;font-weight:600;white-space:nowrap;}
@@ -124,7 +141,11 @@
       <label class="lab">患者名（任意）</label>
       <input id="pname" placeholder="例 ポチ" oninput="onNameInput()">
     </div>
-    <div class="fld" style="flex:0 0 140px;">
+    <div class="fld" style="flex:0 0 96px;">
+      <label class="lab">体重 kg（確認用）</label>
+      <input id="pweight" inputmode="decimal" placeholder="例 5" oninput="onWeightInput()">
+    </div>
+    <div class="fld" style="flex:0 0 130px;">
       <label class="lab">日付</label>
       <input id="pdate" type="date" oninput="persist()">
     </div>
@@ -211,7 +232,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-06.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-06.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -259,6 +280,10 @@ function doseLabel(f){
   if(f.n < f.d) return f.n+'/'+f.d;   // 1未満 → 1/4, 1/8 …（先生の記法）
   return fmtNum(f.toNumber());          // 1以上の端数 → 1.5, 1.25 …
 }
+/** 単位に応じた1回量表記：錠(T)は分数、それ以外(ml/mg等)は小数 */
+function doseDisp(f, unit){
+  return (unit && unit!=='T') ? fmtNum(f.toNumber()) : doseLabel(f);
+}
 
 // ─────────────────────────────────────────────────────────────
 // 状態
@@ -289,21 +314,30 @@ const uid = ()=> 'r'+(_seq++);
 function persist(){
   syncFromDom();
   localStorage.setItem('rx_state', JSON.stringify({
-    karte:val('karte'), pname:val('pname'), pdate:val('pdate'), rows
+    karte:val('karte'), pname:val('pname'), weight:val('pweight'), pdate:val('pdate'), rows
   }));
 }
 function persistPresets(){ localStorage.setItem('rx_presets', JSON.stringify(presets)); }
 function persistSettings(){ localStorage.setItem('rx_settings', JSON.stringify(settings)); }
 function persistLearned(){ localStorage.setItem('rx_learned', JSON.stringify(learned)); }
 
-/** コピー/送信した処方の薬剤名を自動で候補に覚える（新しいものを先頭へ・最大300件） */
+/** コピー/送信した処方の薬剤名を自動で候補に覚える（{name,mg}・新しいものを先頭へ・最大300件） */
 function learnNames(){
   let changed=false;
   rows.forEach(r=>{
     const n=(r.name||'').trim();
-    if(n && !learned.includes(n)){ learned.unshift(n); changed=true; }
+    if(n && !learned.some(l=>l.name===n)){ learned.unshift({name:n, mg:''}); changed=true; }
   });
   if(changed){ learned=learned.slice(0,300); persistLearned(); refreshDatalist(); }
+}
+/** 薬剤名から1錠あたりの規格mgを引く（手動プリセット→覚えた薬の順） */
+function drugMg(name){
+  name=(name||'').trim(); if(!name) return null;
+  const p=presets.find(x=>x.name&&x.name.trim()===name);
+  if(p && p.mg && parseFloat(p.mg)>0) return parseFloat(p.mg);
+  const l=learned.find(x=>x.name&&x.name.trim()===name);
+  if(l && l.mg && parseFloat(l.mg)>0) return parseFloat(l.mg);
+  return null;
 }
 
 // ── 処方履歴（カルテ番号ごと・この端末のlocalStorageのみ）─────────────────────
@@ -320,7 +354,7 @@ function saveHistory(){
   if(list[0] && (list[0].lines||[]).join('|')===sig) return;  // 直近と同じ→保存しない
   list.unshift({
     savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
-    rows: rows.map(r=>({name:r.name,dose:r.dose,freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days})),
+    rows: rows.map(r=>({mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage})),
     lines
   });
   hist[key]=list.slice(0,10);
@@ -346,6 +380,7 @@ function onNameInput(){
   if(k && n){ const p = patientsGet(); p[k] = n; patientsSet(p); }  // カルテ番号があれば名前を覚える
   persist();
 }
+function onWeightInput(){ persist(); render(); }            // 体重変更→各薬のmg/kg確認を更新
 function updateRecallBtn(){
   const key=val('karte');
   const list = key ? (historyGet()[key]||[]) : [];
@@ -375,18 +410,22 @@ function closeRecall(){ $('recall').classList.remove('open'); }
 function loadHistoryEntry(i){
   const key=val('karte'); const e=(historyGet()[key]||[])[i];
   if(!e) return;
-  const hasData = rows.some(r=>r.name||r.dose||r.days);
+  const hasData = rows.some(r=>r.name||r.dose||r.days||r.qty||r.usage);
   if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
   if(e.pname!=null){ setVal('pname', e.pname); _nameAuto=true; }  // 日付は今日のまま（今日出し直す用途のため上書きしない）
-  rows = (e.rows||[]).map(r=>({ id:uid(), name:r.name||'', dose:r.dose||'', freq:r.freq||3,
-    freqKey:r.freqKey||'TID', freqEvery:r.freqEvery||1, days:r.days||'', doseOpen:false, w:'', mgkg:'' }));
+  rows = (e.rows||[]).map(r=>({ id:uid(), mode:r.mode||'calc', name:r.name||'', dose:r.dose||'', unit:r.unit||'T', freq:r.freq||3,
+    freqKey:r.freqKey||'TID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', doseOpen:false, w:'', mgkg:'' }));
   if(!rows.length) rows=[blankRow()];
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
 }
 function loadAll(){
   try{ presets = JSON.parse(localStorage.getItem('rx_presets')||'[]'); }catch(_){ presets=[]; }
-  try{ learned = JSON.parse(localStorage.getItem('rx_learned')||'[]'); if(!Array.isArray(learned)) learned=[]; }catch(_){ learned=[]; }
+  try{
+    let raw = JSON.parse(localStorage.getItem('rx_learned')||'[]'); if(!Array.isArray(raw)) raw=[];
+    // 旧形式（文字列の配列）→ {name,mg} に移行
+    learned = raw.map(x => typeof x==='string' ? {name:x, mg:''} : {name:(x&&x.name)||'', mg:(x&&x.mg)||''}).filter(x=>x.name);
+  }catch(_){ learned=[]; }
   try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
        settings = { webhook: (s.webhook && s.webhook.trim()) ? s.webhook : DEFAULT_WEBHOOK }; }
   catch(_){ settings = { webhook: DEFAULT_WEBHOOK }; }
@@ -394,11 +433,12 @@ function loadAll(){
   try{ st = JSON.parse(localStorage.getItem('rx_state')||'{}'); }catch(_){ st={}; }
   setVal('karte', st.karte||'');
   setVal('pname', st.pname||'');
+  setVal('pweight', st.weight||'');
   setVal('pdate', st.pdate|| new Date().toISOString().slice(0,10));
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
   rows.forEach(r=>{ if(!r.id) r.id=uid(); });
 }
-function blankRow(){ return { id:uid(), name:'', dose:'', freq:3, freqKey:'TID', freqEvery:1, days:'', doseOpen:false, w:'', mgkg:'' }; }
+function blankRow(){ return { id:uid(), mode:'calc', name:'', dose:'', unit:'T', freq:3, freqKey:'TID', freqEvery:1, days:'', qty:'', funit:'個', usage:'', doseOpen:false, w:'', mgkg:'' }; }
 
 // ─────────────────────────────────────────────────────────────
 // DOMヘルパー
@@ -421,12 +461,34 @@ function calcRow(r){
   const total = dose.mulInt(doses);
   return { dose, days, total, doses };
 }
-/** 1薬剤の出力行： "1/4T TID イーケプラ 15T/20days" */
+/** 1薬剤の出力行を作る（モード別） */
 function lineFor(r){
-  const c = calcRow(r);
-  if(!c) return null;
-  const name = r.name.trim() || '（薬剤名）';
-  return `${doseLabel(c.dose)}T ${r.freqKey} ${name} ${fmtNum(c.total.toNumber())}T/${c.days}days`;
+  const name = (r.name||'').trim() || '（薬剤名）';
+  if(r.mode==='fixed'){
+    const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
+    if(!qty && !usage) return null;                 // 数量も用法も無ければ出さない
+    let s=name;
+    if(qty||unit) s+=` ${qty}${unit}`;              // 例 ロメワン点眼 1本
+    if(usage) s+=`（${usage}）`;                     // 例 （両眼5-6回/日）
+    return s.trim();
+  }
+  // 計算モード
+  const doseRaw=(r.dose||'').trim();
+  if(!doseRaw) return null;
+  const dose=parseAmount(doseRaw);
+  const unit=(r.unit||'T').trim();
+  const days=parseInt(r.days,10);
+  if(dose){                                          // 数値の1回量
+    if(days>0){
+      const c=calcRow(r);
+      return `${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name} ${fmtNum(c.total.toNumber())}${unit}/${days}days`;
+    }
+    return `${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name}`;   // 日数なし→合計出さず
+  }
+  // 自由記述の1回量（小さじ1/4杯・5kg分 など）→ そのまま
+  let s=`${doseRaw} ${r.freqKey} ${name}`;
+  if(days>0) s+=` ${days}日分`;
+  return s;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -442,20 +504,16 @@ function render(){
 function drugEl(r){
   const el = document.createElement('div');
   el.className='drug'; el.dataset.id=r.id;
-  const opts = presets.map(p=>`<option value="${esc(p.name)}">`).join('');
-  el.innerHTML = `
-    <div class="row1">
-      <div class="name">
-        <label class="lab">薬剤名</label>
-        <input class="f-name" list="preset-dl" value="${esc(r.name)}" placeholder="例 イーケプラ">
-      </div>
-      <button class="del" title="削除">✕</button>
-    </div>
+  const calc = r.mode!=='fixed';
 
+  const calcFields = `
     <div class="grid">
       <div>
-        <label class="lab">1回量（錠）</label>
-        <input class="f-dose" inputmode="decimal" value="${esc(r.dose)}" placeholder="例 1/4">
+        <label class="lab">1回量</label>
+        <div class="dose-row">
+          <input class="f-dose" value="${esc(r.dose)}" placeholder="1/4・0.25・小さじ1/4杯" autocomplete="off">
+          <select class="f-unit">${['T','ml','mg','g','包','滴'].map(u=>`<option ${(r.unit||'T')===u?'selected':''}>${u}</option>`).join('')}</select>
+        </div>
         <div class="chips f-dosechips">
           ${['1/8','1/4','1/3','1/2','3/4','1','1.5','2'].map(v=>`<button class="chip" data-v="${v}">${v}</button>`).join('')}
         </div>
@@ -473,81 +531,143 @@ function drugEl(r){
           ${['5','7','10','14','20','30'].map(v=>`<button class="chip f-daychip" data-v="${v}">${v}</button>`).join('')}
         </div>
       </div>
-    </div>
+    </div>`;
 
-    <div class="calcline">
-      <span class="big">合計</span>
-      <span class="out f-out">—</span>
-      <button class="minibtn f-toggle">⚖️ 用量計算</button>
+  const fixedFields = `
+    <div class="grid2">
+      <div><label class="lab">数量</label><input class="f-qty" inputmode="decimal" value="${esc(r.qty)}" placeholder="例 1"></div>
+      <div><label class="lab">単位</label>
+        <input class="f-funit" value="${esc(r.funit||'個')}" placeholder="個" autocomplete="off">
+        <div class="chips f-funitchips">${['個','本','箱','袋','瓶','包'].map(v=>`<button class="chip" data-v="${v}">${v}</button>`).join('')}</div>
+      </div>
     </div>
+    <div style="margin-top:10px;"><label class="lab">用法・メモ（任意）</label>
+      <input class="f-usage" value="${esc(r.usage)}" placeholder="例 両眼5-6回/日、月1回"></div>`;
 
+  const helpBlock = `
     <div class="dosehelp ${r.doseOpen?'open':''}">
-      <div class="g">
-        <div><label class="lab">体重 kg</label><input class="f-w" inputmode="decimal" value="${esc(r.w)}" placeholder="5"></div>
-        <div><label class="lab">用量 mg/kg（1回）</label><input class="f-mgkg" inputmode="decimal" value="${esc(r.mgkg)}" placeholder="PDF参照"></div>
+      <div class="g3">
+        <div><label class="lab">目標 mg/kg（1回）</label><input class="f-mgkg" inputmode="decimal" value="${esc(r.mgkg)}" placeholder="PDF参照"></div>
         <div><label class="lab">規格 mg/錠</label><input class="f-mg" inputmode="decimal" value="" placeholder="自動 or 入力"></div>
         <div><button class="smallbtn f-apply">1回量へ</button></div>
       </div>
-      <div class="res f-doseres">体重・mg/kg・規格を入れると 1回に必要な錠数を計算します。</div>
+      <div class="res f-doseres">上の「体重」欄・目標mg/kg・規格を入れると 1回に必要な錠数を計算します。</div>
+    </div>`;
+
+  el.innerHTML = `
+    <div class="drug-top">
+      <div class="mode-seg">
+        <button class="mbtn ${calc?'on':''}" data-m="calc">錠剤・液剤（計算）</button>
+        <button class="mbtn ${!calc?'on':''}" data-m="fixed">定量・外用</button>
+      </div>
+      <button class="del" title="削除">✕</button>
     </div>
+    <div class="namewrap">
+      <label class="lab">薬剤名</label>
+      <input class="f-name" value="${esc(r.name)}" placeholder="例 イーケプラ" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="ac-list f-ac"></div>
+    </div>
+    ${calc ? calcFields : fixedFields}
+    <div class="calcline">
+      <span class="out f-out">—</span>
+      ${calc ? '<button class="minibtn f-toggle">⚖️ 用量計算</button>' : ''}
+    </div>
+    ${calc ? helpBlock : ''}
   `;
 
-  // --- ハンドラ ---
   const q = s=>el.querySelector(s);
-  const nameEl=q('.f-name'), doseEl=q('.f-dose'), daysEl=q('.f-days');
 
-  nameEl.addEventListener('input', ()=>{ r.name=nameEl.value; autofillMg(r,el); persist(); renderPreview(); });
-  doseEl.addEventListener('input', ()=>{ r.dose=doseEl.value; updateOut(r,el); persist(); renderPreview(); });
-  daysEl.addEventListener('input', ()=>{ r.days=daysEl.value; updateOut(r,el); persist(); renderPreview(); });
-
-  el.querySelector('.del').addEventListener('click', ()=>{ removeRow(r.id); });
-
-  q('.f-dosechips').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
-    r.dose=c.dataset.v; doseEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
-  }));
-  el.querySelectorAll('.f-daychip').forEach(c=>c.addEventListener('click',()=>{
-    r.days=c.dataset.v; daysEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
-  }));
-  q('.f-freq').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
-    r.freq=+c.dataset.n; r.freqKey=c.dataset.k; r.freqEvery=+c.dataset.e;
-    q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
-    updateOut(r,el); persist(); renderPreview();
+  // モード切替
+  el.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',()=>{
+    const m=b.dataset.m; if((m==='fixed')===(r.mode==='fixed')) return;
+    r.mode=m; render(); persist(); renderPreview();
   }));
 
-  // 用量計算ヘルパー
-  const help=q('.dosehelp');
-  q('.f-toggle').addEventListener('click',()=>{ r.doseOpen=!r.doseOpen; help.classList.toggle('open',r.doseOpen); });
-  const wEl=q('.f-w'), mgkgEl=q('.f-mgkg'), mgEl=q('.f-mg');
-  autofillMg(r,el);
-  const recompute=()=>{ r.w=wEl.value; r.mgkg=mgkgEl.value; doseHelp(el,wEl.value,mgkgEl.value,mgEl.value); persist(); };
-  wEl.addEventListener('input',recompute); mgkgEl.addEventListener('input',recompute); mgEl.addEventListener('input',recompute);
-  q('.f-apply').addEventListener('click',()=>{
-    const t=doseHelp(el,wEl.value,mgkgEl.value,mgEl.value,true);
-    if(t!=null){ r.dose=t; doseEl.value=t; updateOut(r,el); persist(); renderPreview(); toast('1回量に反映しました'); }
-  });
+  // 薬剤名＋自作サジェスト
+  const nameEl=q('.f-name');
+  const onName=()=>{ r.name=nameEl.value; if(calc) autofillMg(r,el); updateOut(r,el); persist(); renderPreview(); };
+  attachAutocomplete(nameEl, q('.f-ac'), onName);
+  el.querySelector('.del').addEventListener('click', ()=>removeRow(r.id));
+
+  if(calc){
+    const doseEl=q('.f-dose'), daysEl=q('.f-days'), unitEl=q('.f-unit');
+    doseEl.addEventListener('input', ()=>{ r.dose=doseEl.value; updateOut(r,el); persist(); renderPreview(); });
+    daysEl.addEventListener('input', ()=>{ r.days=daysEl.value; updateOut(r,el); persist(); renderPreview(); });
+    unitEl.addEventListener('change', ()=>{ r.unit=unitEl.value; updateOut(r,el); persist(); renderPreview(); });
+    q('.f-dosechips').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+      r.dose=c.dataset.v; doseEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
+    }));
+    el.querySelectorAll('.f-daychip').forEach(c=>c.addEventListener('click',()=>{
+      r.days=c.dataset.v; daysEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
+    }));
+    q('.f-freq').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+      r.freq=+c.dataset.n; r.freqKey=c.dataset.k; r.freqEvery=+c.dataset.e;
+      q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+      updateOut(r,el); persist(); renderPreview();
+    }));
+    const help=q('.dosehelp'), tgl=q('.f-toggle');
+    if(tgl) tgl.addEventListener('click',()=>{ r.doseOpen=!r.doseOpen; help.classList.toggle('open',r.doseOpen); });
+    const mgkgEl=q('.f-mgkg'), mgEl=q('.f-mg');
+    autofillMg(r,el);
+    const recompute=()=>{ r.mgkg=mgkgEl.value; doseHelp(el,val('pweight'),mgkgEl.value,mgEl.value); persist(); };
+    mgkgEl.addEventListener('input',recompute); mgEl.addEventListener('input',recompute);
+    q('.f-apply').addEventListener('click',()=>{
+      const t=doseHelp(el,val('pweight'),mgkgEl.value,mgEl.value,true);
+      if(t!=null){ r.dose=t; doseEl.value=t; updateOut(r,el); persist(); renderPreview(); toast('1回量に反映しました'); }
+    });
+    doseHelp(el,val('pweight'),r.mgkg,'');
+  } else {
+    const qtyEl=q('.f-qty'), funitEl=q('.f-funit'), usageEl=q('.f-usage');
+    qtyEl.addEventListener('input', ()=>{ r.qty=qtyEl.value; updateOut(r,el); persist(); renderPreview(); });
+    funitEl.addEventListener('input', ()=>{ r.funit=funitEl.value; updateOut(r,el); persist(); renderPreview(); });
+    usageEl.addEventListener('input', ()=>{ r.usage=usageEl.value; updateOut(r,el); persist(); renderPreview(); });
+    q('.f-funitchips').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+      r.funit=c.dataset.v; funitEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
+    }));
+  }
 
   updateOut(r,el);
-  doseHelp(el,r.w,r.mgkg,'');
   return el;
 }
 
-/** プリセットに規格mgがあれば用量計算の規格欄へ自動補完 */
+/** プリセット/覚えた薬に規格mgがあれば用量計算の規格欄へ自動補完 */
 function autofillMg(r,el){
   const mgEl=el.querySelector('.f-mg'); if(!mgEl || mgEl.value) return;
-  const p = presets.find(p=>p.name && p.name===r.name.trim());
-  if(p && p.mg) mgEl.value=p.mg;
+  const mg=drugMg(r.name);
+  if(mg!=null) mgEl.value=fmtNum(mg);
 }
 
+/** 体重(共通)と規格mgが分かれば、1回量から mg/kg を出す確認文（カルテには入れない） */
+function verifyMgkg(r){
+  if(r.mode==='fixed') return '';
+  const dose=parseAmount(r.dose); if(!dose) return '';
+  const W=parseFloat(val('pweight')), MG=drugMg(r.name);
+  if(!(W>0) || !(MG>0)) return '';
+  const mgkg = (dose.toNumber()*MG)/W;             // 1回あたり mg/kg
+  return `<br><span class="verify">用量確認 ≈ ${fmtNum(Math.round(mgkg*1000)/1000)} mg/kg ${r.freqKey}（規格${fmtNum(MG)}mg）</span>`;
+}
 function updateOut(r,el){
-  const c=calcRow(r);
-  const out=el.querySelector('.f-out');
-  if(!c){ out.innerHTML='<span style="color:var(--muted)">1回量・頻度・日数を入力</span>'; return; }
-  const frac = c.total.d!==1 ? `（${c.total.mixed()}）` : '';
-  const breakdown = (r.freqEvery>1)
-    ? `= ${doseLabel(c.dose)} × ${c.doses}回（${r.freqEvery}日に1回×${c.days}日）`
-    : `= ${doseLabel(c.dose)} × ${r.freq}回/日 × ${c.days}日`;
-  out.innerHTML = `<b style="color:#fff">${fmtNum(c.total.toNumber())}T</b> ${frac} ／ ${c.days}日分　`
-    + `<span style="color:var(--muted)">${breakdown}</span>`;
+  const out=el.querySelector('.f-out'); if(!out) return;
+  if(r.mode==='fixed'){
+    const line=lineFor(r);
+    out.innerHTML = line ? `<span style="color:var(--muted)">出力：</span> ${esc(line)}`
+                         : '<span style="color:var(--muted)">数量や用法を入力</span>';
+    return;
+  }
+  const doseRaw=(r.dose||'').trim();
+  if(!doseRaw){ out.innerHTML='<span style="color:var(--muted)">1回量を入力（頻度・日数）</span>'; return; }
+  const dose=parseAmount(doseRaw), days=parseInt(r.days,10), unit=(r.unit||'T').trim();
+  if(dose && days>0){                               // 数値＋日数 → 合計を強調
+    const c=calcRow(r);
+    const frac = c.total.d!==1 ? `（${c.total.mixed()}）` : '';
+    const breakdown = (r.freqEvery>1)
+      ? `= ${doseDisp(c.dose,unit)}${unit} × ${c.doses}回（${r.freqEvery}日に1回×${c.days}日）`
+      : `= ${doseDisp(c.dose,unit)}${unit} × ${r.freq}回/日 × ${c.days}日`;
+    out.innerHTML = `<b style="color:#fff">合計 ${fmtNum(c.total.toNumber())}${unit}</b> ${frac} `
+      + `<span style="color:var(--muted)">${breakdown}</span>` + verifyMgkg(r);
+  } else {                                          // 自由記述 or 日数なし → 出力そのまま
+    out.innerHTML = `<span style="color:var(--muted)">出力：</span> ${esc(lineFor(r)||'')}` + verifyMgkg(r);
+  }
 }
 
 /** 用量ヘルパー：体重×mg/kg = 1回必要mg、÷規格 = 1回錠数。apply=true なら文字列を返す */
@@ -581,15 +701,38 @@ function renderPreview(){
   $('preview').textContent = lines.length ? lines.join('\n') : '—';
   refreshDatalist();
 }
+/** 手動プリセット名＋覚えた薬名を重複なく集め、五十音順で返す */
+function allDrugNames(){
+  const names=[], seen=new Set();
+  presets.forEach(p=>{ const n=(p.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  learned.forEach(l=>{ const n=(l.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  names.sort((a,b)=>a.localeCompare(b,'ja'));
+  return names;
+}
 function refreshDatalist(){
   let dl=$('preset-dl');
   if(!dl){ dl=document.createElement('datalist'); dl.id='preset-dl'; document.body.appendChild(dl); }
-  // 手動プリセット名＋自動学習名を重複なく集め、五十音順（日本語ロケール）で候補に
-  const names=[], seen=new Set();
-  presets.forEach(p=>{ const n=(p.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
-  learned.forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
-  names.sort((a,b)=>a.localeCompare(b,'ja'));
-  dl.innerHTML = names.map(n=>`<option value="${esc(n)}">`).join('');
+  dl.innerHTML = allDrugNames().map(n=>`<option value="${esc(n)}">`).join('');
+}
+/** 薬剤名の自作サジェスト（文字入力を邪魔しない・下にタップ候補を出す） */
+function attachAutocomplete(input, list, onChange){
+  const hide=()=>{ list.style.display='none'; list.innerHTML=''; };
+  const show=()=>{
+    const v=(input.value||'').trim(); if(!v){ hide(); return; }
+    const lc=v.toLowerCase(), all=allDrugNames();
+    let m=all.filter(n=>n.toLowerCase().startsWith(lc));
+    if(m.length<6) m=m.concat(all.filter(n=>!m.includes(n)&&n.toLowerCase().includes(lc)));
+    m=m.slice(0,6);
+    if(!m.length || (m.length===1 && m[0]===v)){ hide(); return; }
+    list.innerHTML=m.map(n=>`<div class="ac-item">${esc(n)}</div>`).join('');
+    [...list.children].forEach((it,i)=> it.addEventListener('pointerdown',ev=>{
+      ev.preventDefault(); input.value=m[i]; hide(); onChange();
+    }));
+    list.style.display='block';
+  };
+  input.addEventListener('input', ()=>{ onChange(); show(); });
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', ()=> setTimeout(hide,150));
 }
 
 function copyOut(){
@@ -665,8 +808,16 @@ function openSettings(){ $('webhook').value=settings.webhook||''; renderPresets(
 function renderLearned(){
   const box=$('learnedList'); if(!box) return;
   if(!learned.length){ box.innerHTML='<span class="hint">まだありません（コピー／送信すると覚えます）</span>'; return; }
-  box.innerHTML = learned.map((n,i)=>`<button class="chip lchip" data-i="${i}">${esc(n)} ✕</button>`).join('');
-  box.querySelectorAll('.lchip').forEach(b=>b.addEventListener('click',()=>{
+  box.innerHTML = learned.map((l,i)=>`
+    <div class="preset">
+      <input class="pn" value="${esc(l.name)}" readonly style="flex:1;background:#181d30">
+      <input class="ps lmg" data-i="${i}" inputmode="decimal" placeholder="mg/錠" value="${esc(l.mg||'')}">
+      <button class="pd lrm" data-i="${i}" title="削除">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('.lmg').forEach(inp=>inp.addEventListener('input',()=>{
+    const i=+inp.dataset.i; if(learned[i]){ learned[i].mg=inp.value.trim(); persistLearned(); }
+  }));
+  box.querySelectorAll('.lrm').forEach(b=>b.addEventListener('click',()=>{
     learned.splice(+b.dataset.i,1); persistLearned(); refreshDatalist(); renderLearned();
   }));
 }
