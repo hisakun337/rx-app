@@ -167,6 +167,12 @@
     </div>
 
     <div class="sec">
+      <label class="lab">覚えた薬剤名（自動・タップで削除）</label>
+      <div id="learnedList" class="chips"></div>
+      <p class="hint">コピー／送信した薬剤名を自動で候補に覚えます。間違えて覚えた名前はタップで消せます。</p>
+    </div>
+
+    <div class="sec">
       <p class="hint"><b>出力の形式</b>：<br>
       <code>1/4T TID イーケプラ 15T/20days</code><br>
       ＝ 1回量T ／ 頻度 ／ 薬剤名 ／ 合計T ／ 日数。<br>
@@ -252,7 +258,8 @@ const FREQS = [
 const DEFAULT_WEBHOOK = '';
 
 let rows = [];        // {id, name, dose, freq(n), freqKey, days, doseOpen, w, mgkg}
-let presets = [];     // {name, mg}
+let presets = [];     // {name, mg}（手動登録・規格mgあり）
+let learned = [];     // 自動学習した薬剤名（コピー/送信時に覚える）
 let settings = { webhook: DEFAULT_WEBHOOK };
 let _seq = 1;
 const uid = ()=> 'r'+(_seq++);
@@ -268,6 +275,17 @@ function persist(){
 }
 function persistPresets(){ localStorage.setItem('rx_presets', JSON.stringify(presets)); }
 function persistSettings(){ localStorage.setItem('rx_settings', JSON.stringify(settings)); }
+function persistLearned(){ localStorage.setItem('rx_learned', JSON.stringify(learned)); }
+
+/** コピー/送信した処方の薬剤名を自動で候補に覚える（新しいものを先頭へ・最大300件） */
+function learnNames(){
+  let changed=false;
+  rows.forEach(r=>{
+    const n=(r.name||'').trim();
+    if(n && !learned.includes(n)){ learned.unshift(n); changed=true; }
+  });
+  if(changed){ learned=learned.slice(0,300); persistLearned(); refreshDatalist(); }
+}
 
 // ── 処方履歴（カルテ番号ごと・この端末のlocalStorageのみ）─────────────────────
 function historyGet(){ try{ return JSON.parse(localStorage.getItem('rx_history')||'{}'); }catch(_){ return {}; } }
@@ -330,6 +348,7 @@ function loadHistoryEntry(i){
 }
 function loadAll(){
   try{ presets = JSON.parse(localStorage.getItem('rx_presets')||'[]'); }catch(_){ presets=[]; }
+  try{ learned = JSON.parse(localStorage.getItem('rx_learned')||'[]'); if(!Array.isArray(learned)) learned=[]; }catch(_){ learned=[]; }
   try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
        settings = { webhook: (s.webhook && s.webhook.trim()) ? s.webhook : DEFAULT_WEBHOOK }; }
   catch(_){ settings = { webhook: DEFAULT_WEBHOOK }; }
@@ -521,13 +540,18 @@ function renderPreview(){
 function refreshDatalist(){
   let dl=$('preset-dl');
   if(!dl){ dl=document.createElement('datalist'); dl.id='preset-dl'; document.body.appendChild(dl); }
-  dl.innerHTML = presets.map(p=>`<option value="${esc(p.name)}">`).join('');
+  // 手動プリセット名＋自動学習名を重複なく候補に（プリセット優先）
+  const names=[], seen=new Set();
+  presets.forEach(p=>{ const n=(p.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  learned.forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  dl.innerHTML = names.map(n=>`<option value="${esc(n)}">`).join('');
 }
 
 function copyOut(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   saveHistory();
+  learnNames();
   copyText(lines.join('\n'));
 }
 function copyText(t){
@@ -561,6 +585,7 @@ function sendSlack(){
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   if(!settings.webhook){ toast('設定でSlack Webhookを登録してください'); openSettings(); return; }
   saveHistory();
+  learnNames();
   const text=buildSlackText();
   // ブラウザからのWebhook投稿はCORSのため no-cors（成否は受け取れない＝投げっぱなし）
   fetch(settings.webhook, { method:'POST', mode:'no-cors', body: JSON.stringify({ text }) })
@@ -591,7 +616,15 @@ function clearAll(){
 // ─────────────────────────────────────────────────────────────
 // 設定・プリセット
 // ─────────────────────────────────────────────────────────────
-function openSettings(){ $('webhook').value=settings.webhook||''; renderPresets(); $('settings').classList.add('open'); }
+function openSettings(){ $('webhook').value=settings.webhook||''; renderPresets(); renderLearned(); $('settings').classList.add('open'); }
+function renderLearned(){
+  const box=$('learnedList'); if(!box) return;
+  if(!learned.length){ box.innerHTML='<span class="hint">まだありません（コピー／送信すると覚えます）</span>'; return; }
+  box.innerHTML = learned.map((n,i)=>`<button class="chip lchip" data-i="${i}">${esc(n)} ✕</button>`).join('');
+  box.querySelectorAll('.lchip').forEach(b=>b.addEventListener('click',()=>{
+    learned.splice(+b.dataset.i,1); persistLearned(); refreshDatalist(); renderLearned();
+  }));
+}
 function saveSettings(){
   settings.webhook = $('webhook').value.trim();
   // プリセットを読み取り
