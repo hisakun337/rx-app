@@ -84,6 +84,9 @@
   .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
     width:100%;max-width:560px;padding:16px;margin-top:20px;}
   .panel h3{margin:2px 0 12px;font-size:16px;}
+  .panel-head{position:sticky;top:0;z-index:6;background:var(--card);display:flex;align-items:center;
+    justify-content:space-between;gap:10px;padding:6px 0 10px;margin:-4px 0 6px;border-bottom:1px solid var(--line);}
+  .phead-save{background:var(--accent2);color:#fff;border:none;border-radius:9px;padding:10px 14px;font-size:14px;font-weight:800;white-space:nowrap;}
   .panel .sec{margin:16px 0;padding-top:14px;border-top:1px solid var(--line);}
   .preset{display:flex;gap:8px;align-items:center;margin:6px 0;}
   .preset .pn{flex:1;} .preset .ps{width:110px;} .preset .pd{background:transparent;border:none;color:var(--danger);font-size:20px;}
@@ -185,7 +188,10 @@
 <!-- 設定パネル -->
 <div class="settings" id="settings">
   <div class="panel">
-    <h3>⚙︎ 設定</h3>
+    <div class="panel-head">
+      <h3 style="margin:0">⚙︎ 設定</h3>
+      <button class="phead-save" onclick="saveSettings()">✓ 保存して閉じる</button>
+    </div>
 
     <div>
       <label class="lab">Slack Incoming Webhook URL</label>
@@ -208,13 +214,14 @@
 
     <div class="sec">
       <label class="lab">データのバックアップ / 復元（機種変更・保険用）</label>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="smallbtn" onclick="exportData()">書き出す</button>
-        <button class="smallbtn" onclick="document.getElementById('importFile').click()">読み込む</button>
+        <button class="smallbtn" onclick="pickImport('replace')">読み込む（置換）</button>
+        <button class="smallbtn" onclick="pickImport('merge')">追加（不足分だけ）</button>
         <input type="file" id="importFile" accept=".json,application/json" style="display:none"
-               onchange="if(this.files[0])importData(this.files[0]); this.value='';">
+               onchange="if(this.files[0])importData(this.files[0], _importMode); this.value='';">
       </div>
-      <p class="hint">履歴・患者名・覚えた薬・設定はこのiPad内だけに保存されます。新しいiPadに移すときは、ここで書き出したファイルを新しいiPadの「読み込む」で復元してください。</p>
+      <p class="hint">「置換」＝丸ごと入れ替え（機種変更・初期投入向け）。「追加（不足分だけ）」＝今のデータ（mg追記や新しく覚えた薬）を残したまま、ファイルにあって手元に無い薬剤名・患者だけを足します。履歴・Slack設定には触れません。</p>
     </div>
 
     <div class="sec">
@@ -257,7 +264,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-06.5';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-06.6';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -951,18 +958,52 @@ function exportData(){
   setTimeout(()=>URL.revokeObjectURL(url),1500);
   toast('バックアップを書き出しました');
 }
-function importData(file){
+let _importMode='replace';
+function pickImport(mode){ _importMode=mode; document.getElementById('importFile').click(); }
+function importData(file, mode){
   const rd=new FileReader();
   rd.onload=()=>{
     let obj; try{ obj=JSON.parse(rd.result); }catch(_){ toast('ファイルを読めませんでした'); return; }
     const data = obj && obj.data ? obj.data : null;
     if(!data || typeof data!=='object'){ toast('バックアップの形式が違います'); return; }
-    if(!confirm('この端末のデータを、読み込んだバックアップで置き換えます。よろしいですか？')) return;
-    BACKUP_KEYS.forEach(k=>{ if(typeof data[k]==='string') localStorage.setItem(k, data[k]); });
-    toast('復元しました。画面を更新します…');
+    if(mode==='merge'){
+      if(!confirm('今のデータは残したまま、不足している薬剤名・患者・プリセットだけを追加します。よろしいですか？')) return;
+      mergeImport(data);
+    } else {
+      if(!confirm('この端末のデータを、読み込んだファイルで置き換えます。よろしいですか？')) return;
+      BACKUP_KEYS.forEach(k=>{ if(typeof data[k]==='string') localStorage.setItem(k, data[k]); });
+    }
+    toast('読み込みました。画面を更新します…');
     setTimeout(()=>location.reload(), 900);
   };
   rd.readAsText(file);
+}
+/** マージ読み込み：既存を残し、無いものだけ追加（覚えた薬・患者・プリセット。履歴/設定は触らない） */
+function mergeImport(data){
+  const parse=(s)=>{ try{ return JSON.parse(s); }catch(_){ return null; } };
+  // 覚えた薬剤名（name一致で重複回避・既存のmgは保持）
+  if(typeof data.rx_learned==='string'){
+    let inc=parse(data.rx_learned)||[];
+    inc=inc.map(x=> typeof x==='string'?{name:x,mg:''}:{name:(x&&x.name)||'',mg:(x&&x.mg)||''}).filter(x=>x.name);
+    const cur=parse(localStorage.getItem('rx_learned'))||[];
+    const arr=cur.map(x=> typeof x==='string'?{name:x,mg:''}:x);
+    const have=new Set(arr.map(x=>x.name));
+    inc.forEach(x=>{ if(!have.has(x.name)){ arr.push(x); have.add(x.name); } });
+    localStorage.setItem('rx_learned', JSON.stringify(arr));
+  }
+  // 患者（カルテNo一致で重複回避・既存の名前は保持）
+  if(typeof data.rx_patients==='string'){
+    const inc=parse(data.rx_patients)||{}, cur=parse(localStorage.getItem('rx_patients'))||{};
+    for(const k in inc){ if(!(k in cur)) cur[k]=inc[k]; }
+    localStorage.setItem('rx_patients', JSON.stringify(cur));
+  }
+  // 手動プリセット（name一致で重複回避）
+  if(typeof data.rx_presets==='string'){
+    const inc=parse(data.rx_presets)||[], cur=parse(localStorage.getItem('rx_presets'))||[];
+    const have=new Set(cur.map(p=>p&&p.name));
+    inc.forEach(p=>{ if(p&&p.name&&!have.has(p.name)){ cur.push(p); have.add(p.name); } });
+    localStorage.setItem('rx_presets', JSON.stringify(cur));
+  }
 }
 $('settings').addEventListener('click',e=>{ if(e.target===$('settings')) $('settings').classList.remove('open'); });
 $('recall').addEventListener('click',e=>{ if(e.target===$('recall')) closeRecall(); });
