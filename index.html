@@ -225,9 +225,13 @@ const FREQS = [
   {key:'TID', n:3, jp:'1日3回'},
   {key:'QID', n:4, jp:'1日4回'},
 ];
+// Slack送信先(Webhook)は公開リポジトリに置かない（Slackが自動失効させるため）。
+// 各iPadの「⚙︎設定」に貼り付け、その端末のlocalStorageにのみ保存する。
+const DEFAULT_WEBHOOK = '';
+
 let rows = [];        // {id, name, dose, freq(n), freqKey, days, doseOpen, w, mgkg}
 let presets = [];     // {name, mg}
-let settings = { webhook:'' };
+let settings = { webhook: DEFAULT_WEBHOOK };
 let _seq = 1;
 const uid = ()=> 'r'+(_seq++);
 
@@ -244,7 +248,9 @@ function persistPresets(){ localStorage.setItem('rx_presets', JSON.stringify(pre
 function persistSettings(){ localStorage.setItem('rx_settings', JSON.stringify(settings)); }
 function loadAll(){
   try{ presets = JSON.parse(localStorage.getItem('rx_presets')||'[]'); }catch(_){ presets=[]; }
-  try{ settings = Object.assign({webhook:''}, JSON.parse(localStorage.getItem('rx_settings')||'{}')); }catch(_){ settings={webhook:''}; }
+  try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
+       settings = { webhook: (s.webhook && s.webhook.trim()) ? s.webhook : DEFAULT_WEBHOOK }; }
+  catch(_){ settings = { webhook: DEFAULT_WEBHOOK }; }
   let st={};
   try{ st = JSON.parse(localStorage.getItem('rx_state')||'{}'); }catch(_){ st={}; }
   setVal('karte', st.karte||'');
