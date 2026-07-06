@@ -119,7 +119,7 @@
     </div>
     <div class="fld">
       <label class="lab">患者名（任意）</label>
-      <input id="pname" placeholder="例 ポチ" oninput="persist()">
+      <input id="pname" placeholder="例 ポチ" oninput="onNameInput()">
     </div>
     <div class="fld" style="flex:0 0 140px;">
       <label class="lab">日付</label>
@@ -294,6 +294,7 @@ function historySet(h){ localStorage.setItem('rx_history', JSON.stringify(h)); }
 function saveHistory(){
   const key=val('karte'); if(!key) return;
   const lines=drugLines(); if(!lines.length) return;
+  const pn=val('pname'); if(pn){ const p=patientsGet(); p[key]=pn; patientsSet(p); }  // 名前も覚える
   const hist=historyGet();
   const list=hist[key]||[];
   const sig=lines.join('|');
@@ -307,7 +308,25 @@ function saveHistory(){
   historySet(hist);
   updateRecallBtn();
 }
-function onKarteInput(){ persist(); updateRecallBtn(); }
+// ── カルテ番号→患者名の記憶（この端末のlocalStorageのみ）──────────────────────
+function patientsGet(){ try{ return JSON.parse(localStorage.getItem('rx_patients')||'{}'); }catch(_){ return {}; } }
+function patientsSet(p){ localStorage.setItem('rx_patients', JSON.stringify(p)); }
+let _nameAuto = false;   // 現在の名前が「自動入力されたもの」か（手入力ならfalse）
+
+function onKarteInput(){
+  const k = val('karte');
+  const pn = k ? patientsGet()[k] : null;
+  const nameEl = $('pname');
+  if(pn){ nameEl.value = pn; _nameAuto = true; }          // 覚えているカルテ→名前を自動入力
+  else if(_nameAuto){ nameEl.value = ''; _nameAuto = false; } // 自動入力名のまま別カルテへ→空にする
+  persist(); updateRecallBtn();
+}
+function onNameInput(){
+  _nameAuto = false;                                       // 手入力された
+  const k = val('karte'), n = val('pname');
+  if(k && n){ const p = patientsGet(); p[k] = n; patientsSet(p); }  // カルテ番号があれば名前を覚える
+  persist();
+}
 function updateRecallBtn(){
   const key=val('karte');
   const list = key ? (historyGet()[key]||[]) : [];
@@ -339,7 +358,7 @@ function loadHistoryEntry(i){
   if(!e) return;
   const hasData = rows.some(r=>r.name||r.dose||r.days);
   if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
-  if(e.pname!=null) setVal('pname', e.pname);   // 日付は今日のまま（今日出し直す用途のため上書きしない）
+  if(e.pname!=null){ setVal('pname', e.pname); _nameAuto=true; }  // 日付は今日のまま（今日出し直す用途のため上書きしない）
   rows = (e.rows||[]).map(r=>({ id:uid(), name:r.name||'', dose:r.dose||'', freq:r.freq||3,
     freqKey:r.freqKey||'TID', days:r.days||'', doseOpen:false, w:'', mgkg:'' }));
   if(!rows.length) rows=[blankRow()];
