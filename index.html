@@ -540,10 +540,11 @@ function renderPreview(){
 function refreshDatalist(){
   let dl=$('preset-dl');
   if(!dl){ dl=document.createElement('datalist'); dl.id='preset-dl'; document.body.appendChild(dl); }
-  // 手動プリセット名＋自動学習名を重複なく候補に（プリセット優先）
+  // 手動プリセット名＋自動学習名を重複なく集め、五十音順（日本語ロケール）で候補に
   const names=[], seen=new Set();
   presets.forEach(p=>{ const n=(p.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
   learned.forEach(n=>{ n=(n||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  names.sort((a,b)=>a.localeCompare(b,'ja'));
   dl.innerHTML = names.map(n=>`<option value="${esc(n)}">`).join('');
 }
 
