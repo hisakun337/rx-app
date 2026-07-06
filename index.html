@@ -247,11 +247,13 @@ function doseLabel(f){
 // ─────────────────────────────────────────────────────────────
 // 状態
 // ─────────────────────────────────────────────────────────────
+// n=1日あたりの回数 / everyDays=何日に1回（EODは2日に1回）
 const FREQS = [
-  {key:'SID', n:1, jp:'1日1回'},
-  {key:'BID', n:2, jp:'1日2回'},
-  {key:'TID', n:3, jp:'1日3回'},
-  {key:'QID', n:4, jp:'1日4回'},
+  {key:'SID', n:1, everyDays:1, jp:'1日1回'},
+  {key:'BID', n:2, everyDays:1, jp:'1日2回'},
+  {key:'TID', n:3, everyDays:1, jp:'1日3回'},
+  {key:'QID', n:4, everyDays:1, jp:'1日4回'},
+  {key:'EOD', n:1, everyDays:2, jp:'2日に1回'},
 ];
 // Slack送信先(Webhook)は公開リポジトリに置かない（Slackが自動失効させるため）。
 // 各iPadの「⚙︎設定」に貼り付け、その端末のlocalStorageにのみ保存する。
@@ -301,7 +303,7 @@ function saveHistory(){
   if(list[0] && (list[0].lines||[]).join('|')===sig) return;  // 直近と同じ→保存しない
   list.unshift({
     savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
-    rows: rows.map(r=>({name:r.name,dose:r.dose,freq:r.freq,freqKey:r.freqKey,days:r.days})),
+    rows: rows.map(r=>({name:r.name,dose:r.dose,freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days})),
     lines
   });
   hist[key]=list.slice(0,10);
@@ -360,7 +362,7 @@ function loadHistoryEntry(i){
   if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
   if(e.pname!=null){ setVal('pname', e.pname); _nameAuto=true; }  // 日付は今日のまま（今日出し直す用途のため上書きしない）
   rows = (e.rows||[]).map(r=>({ id:uid(), name:r.name||'', dose:r.dose||'', freq:r.freq||3,
-    freqKey:r.freqKey||'TID', days:r.days||'', doseOpen:false, w:'', mgkg:'' }));
+    freqKey:r.freqKey||'TID', freqEvery:r.freqEvery||1, days:r.days||'', doseOpen:false, w:'', mgkg:'' }));
   if(!rows.length) rows=[blankRow()];
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
@@ -379,7 +381,7 @@ function loadAll(){
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
   rows.forEach(r=>{ if(!r.id) r.id=uid(); });
 }
-function blankRow(){ return { id:uid(), name:'', dose:'', freq:3, freqKey:'TID', days:'', doseOpen:false, w:'', mgkg:'' }; }
+function blankRow(){ return { id:uid(), name:'', dose:'', freq:3, freqKey:'TID', freqEvery:1, days:'', doseOpen:false, w:'', mgkg:'' }; }
 
 // ─────────────────────────────────────────────────────────────
 // DOMヘルパー
@@ -396,8 +398,11 @@ function calcRow(r){
   const dose = parseAmount(r.dose);
   const days = parseInt(r.days,10);
   if(!dose || !r.freq || !days || days<=0) return null;
-  const total = dose.mulInt(r.freq).mulInt(days);
-  return { dose, days, total };
+  const every = r.freqEvery || 1;
+  // 総投与回数: 毎日系は 回/日×日数、隔日系(EOD)は ⌈日数/2⌉ 回
+  const doses = every > 1 ? Math.ceil(days / every) * r.freq : r.freq * days;
+  const total = dose.mulInt(doses);
+  return { dose, days, total, doses };
 }
 /** 1薬剤の出力行： "1/4T TID イーケプラ 15T/20days" */
 function lineFor(r){
@@ -441,7 +446,7 @@ function drugEl(r){
       <div>
         <label class="lab">頻度</label>
         <div class="chips freq f-freq">
-          ${FREQS.map(f=>`<button class="chip ${r.freqKey===f.key?'on':''}" data-k="${f.key}" data-n="${f.n}">${f.key}<br><span style="font-size:11px;font-weight:600;opacity:.8">${f.jp}</span></button>`).join('')}
+          ${FREQS.map(f=>`<button class="chip ${r.freqKey===f.key?'on':''}" data-k="${f.key}" data-n="${f.n}" data-e="${f.everyDays}">${f.key}<br><span style="font-size:11px;font-weight:600;opacity:.8">${f.jp}</span></button>`).join('')}
         </div>
       </div>
       <div>
@@ -487,7 +492,7 @@ function drugEl(r){
     r.days=c.dataset.v; daysEl.value=c.dataset.v; updateOut(r,el); persist(); renderPreview();
   }));
   q('.f-freq').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
-    r.freq=+c.dataset.n; r.freqKey=c.dataset.k;
+    r.freq=+c.dataset.n; r.freqKey=c.dataset.k; r.freqEvery=+c.dataset.e;
     q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
     updateOut(r,el); persist(); renderPreview();
   }));
@@ -521,8 +526,11 @@ function updateOut(r,el){
   const out=el.querySelector('.f-out');
   if(!c){ out.innerHTML='<span style="color:var(--muted)">1回量・頻度・日数を入力</span>'; return; }
   const frac = c.total.d!==1 ? `（${c.total.mixed()}）` : '';
+  const breakdown = (r.freqEvery>1)
+    ? `= ${doseLabel(c.dose)} × ${c.doses}回（2日に1回×${c.days}日）`
+    : `= ${doseLabel(c.dose)} × ${r.freq}回/日 × ${c.days}日`;
   out.innerHTML = `<b style="color:#fff">${fmtNum(c.total.toNumber())}T</b> ${frac} ／ ${c.days}日分　`
-    + `<span style="color:var(--muted)">= ${doseLabel(c.dose)} × ${r.freq} × ${c.days}</span>`;
+    + `<span style="color:var(--muted)">${breakdown}</span>`;
 }
 
 /** 用量ヘルパー：体重×mg/kg = 1回必要mg、÷規格 = 1回錠数。apply=true なら文字列を返す */
