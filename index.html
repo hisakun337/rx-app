@@ -88,6 +88,15 @@
   .okbtn{background:var(--accent2);color:#fff;border:none;border-radius:10px;padding:12px 16px;font-size:16px;font-weight:800;width:100%;margin-top:10px;}
   .smallbtn{background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 12px;font-weight:700;}
 
+  .recall-btn{width:100%;background:#1c3326;border:1px solid #2f7d54;color:#8ff0b4;
+    border-radius:12px;padding:12px;font-size:15px;font-weight:800;}
+  .recall-btn:active{background:#244433;}
+  .hist{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:11px;margin:8px 0;}
+  .hist-head{font-size:13px;color:var(--muted);font-weight:700;display:flex;justify-content:space-between;gap:8px;margin-bottom:6px;}
+  .hist-time{color:#6b7699;font-weight:600;white-space:nowrap;}
+  .hist-lines{font-family:"SF Mono",ui-monospace,monospace;font-size:14px;color:#dbe6ff;
+    line-height:1.7;margin-bottom:9px;word-break:break-all;}
+
   #toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(12px);
     background:#0b1a12;border:1px solid var(--accent2);color:#d9ffe9;padding:11px 18px;border-radius:999px;
     font-size:15px;font-weight:700;opacity:0;transition:.2s;pointer-events:none;z-index:60;white-space:nowrap;}
@@ -106,7 +115,7 @@
   <div class="patient">
     <div class="fld" style="flex:0 0 150px;">
       <label class="lab">カルテ番号</label>
-      <input id="karte" inputmode="text" placeholder="例 123-1" oninput="persist()">
+      <input id="karte" inputmode="text" placeholder="例 123-1" oninput="onKarteInput()">
     </div>
     <div class="fld">
       <label class="lab">患者名（任意）</label>
@@ -116,6 +125,10 @@
       <label class="lab">日付</label>
       <input id="pdate" type="date" oninput="persist()">
     </div>
+  </div>
+
+  <div id="recallBar" style="display:none;margin:0 0 12px;">
+    <button class="recall-btn" onclick="openRecall()">🔁 このカルテの前回処方 <span id="recallCount"></span></button>
   </div>
 
   <div id="drugs"></div>
@@ -161,6 +174,15 @@
     </div>
 
     <button class="okbtn" onclick="saveSettings()">保存して閉じる</button>
+  </div>
+</div>
+
+<!-- 前回処方の呼び出しパネル -->
+<div class="settings" id="recall">
+  <div class="panel">
+    <h3>🔁 前回処方の呼び出し</h3>
+    <div id="recallList"></div>
+    <button class="okbtn" style="background:#39406a" onclick="closeRecall()">閉じる</button>
   </div>
 </div>
 
@@ -246,6 +268,66 @@ function persist(){
 }
 function persistPresets(){ localStorage.setItem('rx_presets', JSON.stringify(presets)); }
 function persistSettings(){ localStorage.setItem('rx_settings', JSON.stringify(settings)); }
+
+// ── 処方履歴（カルテ番号ごと・この端末のlocalStorageのみ）─────────────────────
+function historyGet(){ try{ return JSON.parse(localStorage.getItem('rx_history')||'{}'); }catch(_){ return {}; } }
+function historySet(h){ localStorage.setItem('rx_history', JSON.stringify(h)); }
+/** コピー/送信した処方を、カルテ番号ごとに記録（直近と同一内容は重複保存しない・各カルテ最大10件） */
+function saveHistory(){
+  const key=val('karte'); if(!key) return;
+  const lines=drugLines(); if(!lines.length) return;
+  const hist=historyGet();
+  const list=hist[key]||[];
+  const sig=lines.join('|');
+  if(list[0] && (list[0].lines||[]).join('|')===sig) return;  // 直近と同じ→保存しない
+  list.unshift({
+    savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
+    rows: rows.map(r=>({name:r.name,dose:r.dose,freq:r.freq,freqKey:r.freqKey,days:r.days})),
+    lines
+  });
+  hist[key]=list.slice(0,10);
+  historySet(hist);
+  updateRecallBtn();
+}
+function onKarteInput(){ persist(); updateRecallBtn(); }
+function updateRecallBtn(){
+  const key=val('karte');
+  const list = key ? (historyGet()[key]||[]) : [];
+  const bar=$('recallBar');
+  if(list.length){ bar.style.display=''; $('recallCount').textContent='（'+list.length+'件）'; }
+  else bar.style.display='none';
+}
+function openRecall(){
+  const key=val('karte'); const list = key ? (historyGet()[key]||[]) : [];
+  const box=$('recallList');
+  if(!list.length){
+    box.innerHTML='<p class="hint">このカルテ番号の履歴はまだありません。<br>カルテ番号を入れて「コピー」か「Slックへ送信」をすると記録されます。</p>';
+  } else {
+    box.innerHTML = list.map((e,i)=>`
+      <div class="hist">
+        <div class="hist-head">
+          <span>${esc(e.date||'')}${e.pname?(' ・ '+esc(e.pname)):''}</span>
+          <span class="hist-time">${new Date(e.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+        </div>
+        <div class="hist-lines">${(e.lines||[]).map(esc).join('<br>')}</div>
+        <button class="smallbtn" onclick="loadHistoryEntry(${i})">この処方を読み込む</button>
+      </div>`).join('');
+  }
+  $('recall').classList.add('open');
+}
+function closeRecall(){ $('recall').classList.remove('open'); }
+function loadHistoryEntry(i){
+  const key=val('karte'); const e=(historyGet()[key]||[])[i];
+  if(!e) return;
+  const hasData = rows.some(r=>r.name||r.dose||r.days);
+  if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
+  if(e.pname!=null) setVal('pname', e.pname);   // 日付は今日のまま（今日出し直す用途のため上書きしない）
+  rows = (e.rows||[]).map(r=>({ id:uid(), name:r.name||'', dose:r.dose||'', freq:r.freq||3,
+    freqKey:r.freqKey||'TID', days:r.days||'', doseOpen:false, w:'', mgkg:'' }));
+  if(!rows.length) rows=[blankRow()];
+  render(); persist(); closeRecall();
+  toast('前回処方を読み込みました');
+}
 function loadAll(){
   try{ presets = JSON.parse(localStorage.getItem('rx_presets')||'[]'); }catch(_){ presets=[]; }
   try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
@@ -445,6 +527,7 @@ function refreshDatalist(){
 function copyOut(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
+  saveHistory();
   copyText(lines.join('\n'));
 }
 function copyText(t){
@@ -477,6 +560,7 @@ function sendSlack(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   if(!settings.webhook){ toast('設定でSlack Webhookを登録してください'); openSettings(); return; }
+  saveHistory();
   const text=buildSlackText();
   // ブラウザからのWebhook投稿はCORSのため no-cors（成否は受け取れない＝投げっぱなし）
   fetch(settings.webhook, { method:'POST', mode:'no-cors', body: JSON.stringify({ text }) })
@@ -501,7 +585,7 @@ function clearAll(){
   if(!confirm('この患者の入力をすべてクリアしますか？（薬剤プリセットと設定は残ります）')) return;
   setVal('karte',''); setVal('pname','');
   setVal('pdate', new Date().toISOString().slice(0,10));
-  rows=[blankRow()]; render(); persist(); toast('クリアしました');
+  rows=[blankRow()]; render(); persist(); updateRecallBtn(); toast('クリアしました');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -535,6 +619,7 @@ function presetRow(p){
 }
 function addPreset(){ $('presetList').appendChild(presetRow({name:'',mg:''})); }
 $('settings').addEventListener('click',e=>{ if(e.target===$('settings')) $('settings').classList.remove('open'); });
+$('recall').addEventListener('click',e=>{ if(e.target===$('recall')) closeRecall(); });
 
 // ─────────────────────────────────────────────────────────────
 // トースト
@@ -548,6 +633,7 @@ function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
 loadAll();
 render();
 refreshDatalist();
+updateRecallBtn();
 </script>
 </body>
 </html>
