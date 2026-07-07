@@ -285,7 +285,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-07.4';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-07.5';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -1008,8 +1008,8 @@ async function doAllInOne(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   saveHistory(); learnNames();
-  // 1) コピー（OneNote貼付用）— 同期のexecCommandで確実に、共有シートの前に実行
-  fallbackCopy(lines.join('\n'));
+  // 1) コピー（OneNote貼付用）— 個別ボタンと同じcopyText(navigator.clipboard方式)。共有シートの前に実行
+  copyText(lines.join('\n'));
   // 2) Slack（Webhook設定時のみ・投げっぱなし）
   if(settings.webhook){
     try{ fetch(settings.webhook,{method:'POST',mode:'no-cors',body:JSON.stringify({text:buildSlackText()})}); }catch(_){}
