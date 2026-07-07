@@ -285,7 +285,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-07.6';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-08.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -533,7 +533,7 @@ function loadAll(){
   setVal('karte', st.karte||'');
   setVal('pname', st.pname||'');
   setVal('pweight', st.weight||'');
-  setVal('pdate', st.pdate|| new Date().toISOString().slice(0,10));
+  setVal('pdate', new Date().toISOString().slice(0,10));   // 発行日は開くたび今日に（手動で変更は可）
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
   rows.forEach(r=>{ if(!r.id) r.id=uid(); });
 }
