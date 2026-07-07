@@ -285,7 +285,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-07.5';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-07.6';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -960,7 +960,7 @@ function drawPrescription(g, W, H, drugs){
   g.fillText(`カルテNo：${val('karte')||'　　　　'}`, M, y);
   const pn=val('pname');
   g.fillText(`患者名：${pn ? pn+' ちゃん' : '　　　　'}`, M+px(820), y);
-  const wt=val('pweight'); if(wt){ y+=px(76); g.fillText(`体重：${wt} kg`, M, y); }
+  // 体重は処方箋には印刷しない（2026-07-07・ユーザー要望。体重欄はmg/kg確認用に画面では継続）
 
   // 区切り
   y+=px(52); g.strokeStyle='#333'; g.lineWidth=px(2);
