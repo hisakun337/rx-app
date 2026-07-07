@@ -180,6 +180,14 @@
 
   <button class="addbtn" onclick="addDrug()">＋ 薬剤を追加</button>
 
+  <div style="display:flex;align-items:center;gap:8px;margin:10px 0 0;flex-wrap:wrap;">
+    <span style="font-size:13px;color:var(--muted);font-weight:700;">📅 処方日数を一括</span>
+    <input id="bulkDays" inputmode="numeric" placeholder="日数" onkeydown="if(event.key==='Enter')applyBulkDays()"
+      style="width:76px;padding:9px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:15px;text-align:center;">
+    <button onclick="applyBulkDays()"
+      style="padding:9px 14px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-weight:800;font-size:14px;">全薬に適用</button>
+  </div>
+
   <div class="outputbox">
     <div class="lab2">OneNote貼り付け用（コピーされる内容）</div>
     <div id="preview">—</div>
@@ -285,7 +293,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-08.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-08.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -1055,6 +1063,16 @@ async function generatePrescription(){
 // 行の追加・削除・クリア
 // ─────────────────────────────────────────────────────────────
 function syncFromDom(){ /* 値はイベントでrowsへ反映済み。将来用の空フック */ }
+/** 処方日数を全薬に一括設定（複数薬でほぼ同日数のため）。calcモードの行に適用 */
+function applyBulkDays(){
+  const el=$('bulkDays'); const v=(el&&el.value||'').trim();
+  if(!/^\d+$/.test(v) || +v<=0){ toast('日数を数字で入れてください'); el&&el.focus(); return; }
+  const targets=rows.filter(r=> (r.mode||'calc')!=='fixed');
+  if(!targets.length){ toast('日数を設定できる薬剤がありません'); return; }
+  targets.forEach(r=> r.days=v);
+  render(); persist(); renderPreview();
+  toast(`${targets.length}件の処方日数を ${v}日 にしました`);
+}
 function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
   // 追加した薬剤名にフォーカス
   const last=$('drugs').lastElementChild?.querySelector('.f-name'); last&&last.focus();
