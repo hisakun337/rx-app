@@ -278,7 +278,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-07.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-07.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -972,7 +972,7 @@ function drawPrescription(g, W, H, drugs){
   const rowH = Math.max(needed, Math.min(px(250), (listBottom-listTop)/Math.max(1,drugs.length)));
   prepared.forEach((p,i)=>{
     const info=p.info, ry=listTop+i*rowH;
-    g.textAlign='left'; g.fillStyle='#111'; g.font=F(44,true);       // 薬剤名 16pt太字
+    g.textAlign='left'; g.fillStyle='#111'; g.font=F(39,true);       // 薬剤名 14pt太字（患者名と同サイズ）
     g.fillText(`${i+1}.　${info.name}`, M, ry+px(56));
     g.font=F(39); g.fillStyle='#333';                                // 用法 14pt
     g.fillText(`　　　${info.usage}`, M, ry+px(112));
