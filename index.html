@@ -234,7 +234,7 @@
         <input type="file" id="importFile" accept=".json,application/json" style="display:none"
                onchange="if(this.files[0])importData(this.files[0], _importMode); this.value='';">
       </div>
-      <p class="hint">「置換」＝丸ごと入れ替え（機種変更・初期投入向け）。「追加（不足分だけ）」＝今のデータ（mg追記や新しく覚えた薬）を残したまま、ファイルにあって手元に無い薬剤名・患者だけを足します。履歴・Slack設定には触れません。</p>
+      <p class="hint">「置換」＝丸ごと入れ替え（機種変更・初期投入向け）。「追加（不足分だけ）」＝今のデータ（mg追記や新しく覚えた薬）を残したまま、ファイルにあって手元に無い薬剤名・患者だけを足します。既存の薬で説明欄・mgが空のものにはファイルの内容を補います（手入力した説明は上書きしません）。履歴・Slack設定には触れません。</p>
     </div>
 
     <div class="sec">
@@ -278,7 +278,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-06.8';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-07.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -1132,7 +1132,7 @@ function importData(file, mode){
     const data = obj && obj.data ? obj.data : null;
     if(!data || typeof data!=='object'){ toast('バックアップの形式が違います'); return; }
     if(mode==='merge'){
-      if(!confirm('今のデータは残したまま、不足している薬剤名・患者・プリセットだけを追加します。よろしいですか？')) return;
+      if(!confirm('今のデータは残したまま、不足している薬剤名・患者・プリセットだけを追加します。\n（既存の薬で説明欄・mgが空のものには、ファイルの内容を補います。手入力した説明は上書きしません。）\nよろしいですか？')) return;
       mergeImport(data);
     } else {
       if(!confirm('この端末のデータを、読み込んだファイルで置き換えます。よろしいですか？')) return;
@@ -1146,14 +1146,17 @@ function importData(file, mode){
 /** マージ読み込み：既存を残し、無いものだけ追加（覚えた薬・患者・プリセット。履歴/設定は触らない） */
 function mergeImport(data){
   const parse=(s)=>{ try{ return JSON.parse(s); }catch(_){ return null; } };
-  // 覚えた薬剤名（name一致で重複回避・既存のmgは保持）
+  // 覚えた薬剤名（name一致で重複回避）。既存薬は mg/説明が空のときだけファイルの値で補完（手入力は上書きしない）
   if(typeof data.rx_learned==='string'){
     let inc=parse(data.rx_learned)||[];
-    inc=inc.map(x=> typeof x==='string'?{name:x,mg:''}:{name:(x&&x.name)||'',mg:(x&&x.mg)||''}).filter(x=>x.name);
+    inc=inc.map(x=> typeof x==='string'?{name:x,mg:'',note:''}:{name:(x&&x.name)||'',mg:(x&&x.mg)||'',note:(x&&x.note)||''}).filter(x=>x.name);
     const cur=parse(localStorage.getItem('rx_learned'))||[];
-    const arr=cur.map(x=> typeof x==='string'?{name:x,mg:''}:x);
-    const have=new Set(arr.map(x=>x.name));
-    inc.forEach(x=>{ if(!have.has(x.name)){ arr.push(x); have.add(x.name); } });
+    const arr=cur.map(x=> typeof x==='string'?{name:x,mg:'',note:''}:{name:x.name,mg:x.mg||'',note:x.note||''});
+    const idx=new Map(arr.map((x,i)=>[x.name,i]));
+    inc.forEach(x=>{
+      if(idx.has(x.name)){ const e=arr[idx.get(x.name)]; if(!e.mg && x.mg) e.mg=x.mg; if(!e.note && x.note) e.note=x.note; }
+      else { arr.push(x); idx.set(x.name, arr.length-1); }
+    });
     localStorage.setItem('rx_learned', JSON.stringify(arr));
   }
   // 患者（カルテNo一致で重複回避・既存の名前は保持）
