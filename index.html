@@ -293,7 +293,9 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-08.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-09.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+// 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
+function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -541,7 +543,7 @@ function loadAll(){
   setVal('karte', st.karte||'');
   setVal('pname', st.pname||'');
   setVal('pweight', st.weight||'');
-  setVal('pdate', new Date().toISOString().slice(0,10));   // 発行日は開くたび今日に（手動で変更は可）
+  setVal('pdate', todayStr());   // 発行日は開くたび今日に（手動で変更は可）
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
   rows.forEach(r=>{ if(!r.id) r.id=uid(); });
 }
@@ -962,7 +964,7 @@ function drawPrescription(g, W, H, drugs){
   // 患者情報（14pt）
   g.textAlign='left'; g.font=F(39); g.fillStyle='#111';
   y+=px(108);
-  const d=val('pdate')|| new Date().toISOString().slice(0,10);
+  const d=val('pdate')|| todayStr();
   g.fillText(`発行日：${d}`, M, y);
   y+=px(76);
   g.fillText(`カルテNo：${val('karte')||'　　　　'}`, M, y);
@@ -1043,7 +1045,7 @@ async function generatePrescription(){
     const img=c.toDataURL('image/jpeg',0.92);
     const pdf=new lib.jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
     pdf.addImage(img,'JPEG',0,0,210,297);
-    const fname=`処方箋_${(val('karte')||'').replace(/[^\w-]/g,'')}_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.pdf`;
+    const fname=`処方箋_${(val('karte')||'').replace(/[^\w-]/g,'')}_${todayStr().replace(/-/g,'')}.pdf`;
     const blob=pdf.output('blob');
     // iOSの共有シート（→プリント/ファイルに保存）を優先
     try{
@@ -1085,7 +1087,7 @@ function removeRow(id){
 function clearAll(){
   if(!confirm('この患者の入力をすべてクリアしますか？（薬剤プリセットと設定は残ります）')) return;
   setVal('karte',''); setVal('pname','');
-  setVal('pdate', new Date().toISOString().slice(0,10));
+  setVal('pdate', todayStr());
   rows=[blankRow()]; render(); persist(); updateRecallBtn(); toast('クリアしました');
 }
 
@@ -1176,7 +1178,7 @@ function exportData(){
   const data={};
   BACKUP_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) data[k]=v; });
   const json = JSON.stringify({ app:'rx-app', exportedAt:new Date().toISOString(), data }, null, 2);
-  const fname = 'rx-backup-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '.json';
+  const fname = 'rx-backup-' + todayStr().replace(/-/g,'') + '.json';
   const blob = new Blob([json], {type:'application/json'});
   // iOSの標準アプリでも保存/AirDropできるよう、共有シートを優先
   try{
