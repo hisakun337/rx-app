@@ -293,7 +293,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-09.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-11.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -571,15 +571,18 @@ function calcRow(r){
   return { dose, days, total, doses };
 }
 /** 1薬剤の出力行を作る（モード別） */
-function lineFor(r){
+/** 1薬剤の表示を {text:プレーン, html:リッチ(合計/数量を太字)} で返す。合計錠数・日数を強調 */
+function _lineParts(r){
   const name = (r.name||'').trim() || '（薬剤名）';
+  const E = s => esc(String(s));
+  const GAP = '　';   // 薬剤名と「合計/数量」の間は全角スペースで広く（見やすさ）
   if(r.mode==='fixed'){
     const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
     if(!qty && !usage) return null;                 // 数量も用法も無ければ出さない
-    let s=name;
-    if(qty||unit) s+=` ${qty}${unit}`;              // 例 ロメワン点眼 1本
-    if(usage) s+=`（${usage}）`;                     // 例 （両眼5-6回/日）
-    return s.trim();
+    let s=name, h=E(name);
+    if(qty||unit){ s+=`${GAP}${qty}${unit}`; h+=`${GAP}<b>${E(qty+unit)}</b>`; }   // 例 ロメワン点眼　1本
+    if(usage){ s+=`（${usage}）`; h+=`（${E(usage)}）`; }
+    return {text:s.trim(), html:h.trim()};
   }
   // 計算モード
   const doseRaw=(r.dose||'').trim();
@@ -588,17 +591,21 @@ function lineFor(r){
   const unit=(r.unit||'T').trim();
   const days=parseInt(r.days,10);
   if(dose){                                          // 数値の1回量
+    const head=`${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name}`;
+    const headH=`${E(doseDisp(dose,unit)+unit)} ${E(r.freqKey)} ${E(name)}`;
     if(days>0){
       const c=calcRow(r);
-      return `${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name} ${fmtNum(c.total.toNumber())}${unit}/${days}days`;
+      const total=`${fmtNum(c.total.toNumber())}${unit}/${days}days`;
+      return {text:`${head}${GAP}${total}`, html:`${headH}${GAP}<b>${E(total)}</b>`};
     }
-    return `${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name}`;   // 日数なし→合計出さず
+    return {text:head, html:headH};                  // 日数なし→合計出さず
   }
   // 自由記述の1回量（小さじ1/4杯・5kg分 など）→ そのまま
-  let s=`${doseRaw} ${r.freqKey} ${name}`;
-  if(days>0) s+=` ${days}日分`;
-  return s;
+  let s=`${doseRaw} ${r.freqKey} ${name}`, h=`${E(doseRaw)} ${E(r.freqKey)} ${E(name)}`;
+  if(days>0){ s+=`${GAP}${days}日分`; h+=`${GAP}<b>${days}日分</b>`; }
+  return {text:s, html:h};
 }
+function lineFor(r){ const o=_lineParts(r); return o?o.text:null; }
 
 // ─────────────────────────────────────────────────────────────
 // 描画
@@ -817,9 +824,29 @@ function doseHelp(el, w, mgkg, mg, apply){
 function drugLines(){
   return rows.map(lineFor).filter(Boolean);
 }
+/** リッチ表示用（合計/数量を<b>太字</b>にしたHTML行）*/
+function drugLinesHtml(){
+  return rows.map(r=>{ const o=_lineParts(r); return o?o.html:null; }).filter(Boolean);
+}
+/** コピー：OneNoteで太字が効くようHTMLとプレーンの両方をクリップボードへ。非対応時はプレーンに自動フォールバック */
+function copyRich(){
+  const plain = drugLines().join('\n');
+  const html  = '<div style="font-family:-apple-system,sans-serif">' + drugLinesHtml().join('<br>') + '</div>';
+  if(navigator.clipboard && window.ClipboardItem && window.isSecureContext){
+    try{
+      const item = new ClipboardItem({
+        'text/plain': new Blob([plain], {type:'text/plain'}),
+        'text/html':  new Blob([html],  {type:'text/html'})
+      });
+      navigator.clipboard.write([item]).then(()=>toast('コピーしました'), ()=>copyText(plain));
+      return;
+    }catch(_){ /* 非対応 */ }
+  }
+  copyText(plain);
+}
 function renderPreview(){
-  const lines=drugLines();
-  $('preview').textContent = lines.length ? lines.join('\n') : '—';
+  const html=drugLinesHtml();
+  $('preview').innerHTML = html.length ? html.join('<br>') : '—';
   refreshDatalist();
 }
 /** 手動プリセット名＋覚えた薬名を重複なく集め、五十音順で返す */
@@ -861,7 +888,7 @@ function copyOut(){
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   saveHistory();
   learnNames();
-  copyText(lines.join('\n'));
+  copyRich();
 }
 function copyText(t){
   if(navigator.clipboard && window.isSecureContext){
@@ -1018,8 +1045,8 @@ async function doAllInOne(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   saveHistory(); learnNames();
-  // 1) コピー（OneNote貼付用）— 個別ボタンと同じcopyText(navigator.clipboard方式)。共有シートの前に実行
-  copyText(lines.join('\n'));
+  // 1) コピー（OneNote貼付用）— HTML(太字)+プレーンの両方を送る。共有シートの前に実行
+  copyRich();
   // 2) Slack（Webhook設定時のみ・投げっぱなし）
   if(settings.webhook){
     try{ fetch(settings.webhook,{method:'POST',mode:'no-cors',body:JSON.stringify({text:buildSlackText()})}); }catch(_){}
