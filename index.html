@@ -39,6 +39,9 @@
   .drug .row1 .name{flex:1;}
   .drug .del{background:transparent;border:none;color:var(--danger);font-size:22px;
     padding:6px 4px;line-height:1;}
+  .drug .mv{background:var(--card2);border:1px solid var(--line);color:var(--text);
+    font-size:14px;line-height:1;padding:7px 9px;border-radius:8px;font-weight:800;}
+  .drug .mv:disabled{opacity:.28;}
   .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px;}
   @media(max-width:520px){.grid{grid-template-columns:1fr;}}
 
@@ -293,7 +296,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-11.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-11.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -613,11 +616,11 @@ function lineFor(r){ const o=_lineParts(r); return o?o.text:null; }
 function render(){
   const box = $('drugs');
   box.innerHTML='';
-  rows.forEach(r=> box.appendChild(drugEl(r)) );
+  rows.forEach((r,i)=> box.appendChild(drugEl(r,i,rows.length)) );
   renderPreview();
 }
 
-function drugEl(r){
+function drugEl(r, idx=0, total=1){
   const el = document.createElement('div');
   el.className='drug'; el.dataset.id=r.id;
   const calc = r.mode!=='fixed';
@@ -677,6 +680,8 @@ function drugEl(r){
         <button class="mbtn ${!calc?'on':''}" data-m="fixed">定量・外用</button>
       </div>
       <label class="rxchk"><input type="checkbox" class="f-rxchk" ${r.rxChecked!==false?'checked':''}>処方箋</label>
+      <button class="mv f-up" title="上へ移動" ${idx===0?'disabled':''}>▲</button>
+      <button class="mv f-down" title="下へ移動" ${idx>=total-1?'disabled':''}>▼</button>
       <button class="del" title="削除">✕</button>
     </div>
     <div class="namewrap">
@@ -715,6 +720,8 @@ function drugEl(r){
   q('.f-note').addEventListener('input', e=>{ r.note=e.target.value; setDrugNote(r.name, e.target.value); persist(); });
   q('.f-rxchk').addEventListener('change', e=>{ r.rxChecked=e.target.checked; persist(); });
   el.querySelector('.del').addEventListener('click', ()=>removeRow(r.id));
+  q('.f-up').addEventListener('click', ()=>moveRow(r.id,-1));
+  q('.f-down').addEventListener('click', ()=>moveRow(r.id,1));
 
   if(calc){
     const doseEl=q('.f-dose'), daysEl=q('.f-days'), unitEl=q('.f-unit');
@@ -1105,6 +1112,13 @@ function applyBulkDays(){
 function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
   // 追加した薬剤名にフォーカス
   const last=$('drugs').lastElementChild?.querySelector('.f-name'); last&&last.focus();
+}
+/** 薬剤の並べ替え（▲上へ/▼下へ）。dir=-1で上、+1で下 */
+function moveRow(id, dir){
+  const i=rows.findIndex(x=>x.id===id); if(i<0) return;
+  const j=i+dir; if(j<0 || j>=rows.length) return;
+  [rows[i],rows[j]]=[rows[j],rows[i]];
+  render(); persist(); renderPreview();
 }
 function removeRow(id){
   rows=rows.filter(r=>r.id!==id);
