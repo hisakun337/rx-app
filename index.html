@@ -296,7 +296,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-11.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-11.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -573,42 +573,54 @@ function calcRow(r){
   const total = dose.mulInt(doses);
   return { dose, days, total, doses };
 }
-/** 1薬剤の出力行を作る（モード別） */
-/** 1薬剤の表示を {text:プレーン, html:リッチ(合計/数量を太字)} で返す。合計錠数・日数を強調 */
+/** 1薬剤を {text:プレーン, left:左列HTML, right:右列HTML(太字対象), html:1行版} で返す。
+ *  right=「合計錠数/日数」等の強調部分。テーブル化で左揃え・列そろえに使う。 */
 function _lineParts(r){
   const name = (r.name||'').trim() || '（薬剤名）';
   const E = s => esc(String(s));
-  const GAP = '　';   // 薬剤名と「合計/数量」の間は全角スペースで広く（見やすさ）
+  const GAP = '　';   // プレーン用：薬剤名と数量の間の全角スペース
+  let text, left, right='';
   if(r.mode==='fixed'){
     const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
     if(!qty && !usage) return null;                 // 数量も用法も無ければ出さない
-    let s=name, h=E(name);
-    if(qty||unit){ s+=`${GAP}${qty}${unit}`; h+=`${GAP}<b>${E(qty+unit)}</b>`; }   // 例 ロメワン点眼　1本
-    if(usage){ s+=`（${usage}）`; h+=`（${E(usage)}）`; }
-    return {text:s.trim(), html:h.trim()};
-  }
-  // 計算モード
-  const doseRaw=(r.dose||'').trim();
-  if(!doseRaw) return null;
-  const dose=parseAmount(doseRaw);
-  const unit=(r.unit||'T').trim();
-  const days=parseInt(r.days,10);
-  if(dose){                                          // 数値の1回量
-    const head=`${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name}`;
-    const headH=`${E(doseDisp(dose,unit)+unit)} ${E(r.freqKey)} ${E(name)}`;
-    if(days>0){
-      const c=calcRow(r);
-      const total=`${fmtNum(c.total.toNumber())}${unit}/${days}days`;
-      return {text:`${head}${GAP}${total}`, html:`${headH}${GAP}<b>${E(total)}</b>`};
+    const nm = usage ? `${name}（${usage}）` : name;
+    left = E(nm);
+    right = (qty||unit) ? E(qty+unit) : '';
+    text = nm + ((qty||unit) ? `${GAP}${qty}${unit}` : '');
+  } else {
+    // 計算モード
+    const doseRaw=(r.dose||'').trim();
+    if(!doseRaw) return null;
+    const dose=parseAmount(doseRaw);
+    const unit=(r.unit||'T').trim();
+    const days=parseInt(r.days,10);
+    if(dose){                                        // 数値の1回量
+      const head=`${doseDisp(dose,unit)}${unit} ${r.freqKey} ${name}`;
+      left = `${E(doseDisp(dose,unit)+unit)} ${E(r.freqKey)} ${E(name)}`;
+      if(days>0){
+        const c=calcRow(r);
+        const total=`${fmtNum(c.total.toNumber())}${unit}/${days}days`;
+        right=E(total); text=`${head}${GAP}${total}`;
+      } else { text=head; }                          // 日数なし→合計出さず
+    } else {                                         // 自由記述の1回量
+      const head=`${doseRaw} ${r.freqKey} ${name}`;
+      left = `${E(doseRaw)} ${E(r.freqKey)} ${E(name)}`;
+      if(days>0){ right=E(days+'日分'); text=`${head}${GAP}${days}日分`; }
+      else { text=head; }
     }
-    return {text:head, html:headH};                  // 日数なし→合計出さず
   }
-  // 自由記述の1回量（小さじ1/4杯・5kg分 など）→ そのまま
-  let s=`${doseRaw} ${r.freqKey} ${name}`, h=`${E(doseRaw)} ${E(r.freqKey)} ${E(name)}`;
-  if(days>0){ s+=`${GAP}${days}日分`; h+=`${GAP}<b>${days}日分</b>`; }
-  return {text:s, html:h};
+  const html = right ? `${left}${GAP}<b>${right}</b>` : left;
+  return {text, left, right, html};
 }
 function lineFor(r){ const o=_lineParts(r); return o?o.text:null; }
+/** 貼付用：2列テーブル（左=処方内容 / 右=合計を太字・左揃え）。セル余白で行間も確保 */
+function drugTableHtml(){
+  const trs = rows.map(r=>{ const o=_lineParts(r); if(!o) return null;
+    return `<tr><td style="border:none;padding:9px 34px 9px 0;white-space:nowrap;vertical-align:top">${o.left}</td>`+
+           `<td style="border:none;padding:9px 0;white-space:nowrap;vertical-align:top">${o.right?`<b>${o.right}</b>`:''}</td></tr>`;
+  }).filter(Boolean).join('');
+  return `<table style="border-collapse:collapse;border:none;font-family:-apple-system,sans-serif;font-size:15px;line-height:1.5">${trs}</table>`;
+}
 
 // ─────────────────────────────────────────────────────────────
 // 描画
@@ -838,7 +850,7 @@ function drugLinesHtml(){
 /** コピー：OneNoteで太字が効くようHTMLとプレーンの両方をクリップボードへ。非対応時はプレーンに自動フォールバック */
 function copyRich(){
   const plain = drugLines().join('\n');
-  const html  = '<div style="font-family:-apple-system,sans-serif">' + drugLinesHtml().join('<br>') + '</div>';
+  const html  = drugTableHtml();
   if(navigator.clipboard && window.ClipboardItem && window.isSecureContext){
     try{
       const item = new ClipboardItem({
@@ -852,8 +864,7 @@ function copyRich(){
   copyText(plain);
 }
 function renderPreview(){
-  const html=drugLinesHtml();
-  $('preview').innerHTML = html.length ? html.join('<br>') : '—';
+  $('preview').innerHTML = drugLines().length ? drugTableHtml() : '—';
   refreshDatalist();
 }
 /** 手動プリセット名＋覚えた薬名を重複なく集め、五十音順で返す */
