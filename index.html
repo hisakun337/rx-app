@@ -296,7 +296,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-11.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-11.4';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -616,8 +616,8 @@ function lineFor(r){ const o=_lineParts(r); return o?o.text:null; }
 /** 貼付用：2列テーブル（左=処方内容 / 右=合計を太字・左揃え）。セル余白で行間も確保 */
 function drugTableHtml(){
   const trs = rows.map(r=>{ const o=_lineParts(r); if(!o) return null;
-    return `<tr><td style="border:none;padding:9px 34px 9px 0;white-space:nowrap;vertical-align:top">${o.left}</td>`+
-           `<td style="border:none;padding:9px 0;white-space:nowrap;vertical-align:top">${o.right?`<b>${o.right}</b>`:''}</td></tr>`;
+    return `<tr><td style="border:none;padding:11px 34px 11px 0;white-space:nowrap;vertical-align:top">${o.left}</td>`+
+           `<td style="border:none;padding:11px 0;white-space:nowrap;vertical-align:top">${o.right?`<b>${o.right}</b>`:''}</td></tr>`;
   }).filter(Boolean).join('');
   return `<table style="border-collapse:collapse;border:none;font-family:-apple-system,sans-serif;font-size:15px;line-height:1.5">${trs}</table>`;
 }
