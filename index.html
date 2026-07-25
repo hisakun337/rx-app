@@ -242,7 +242,8 @@
     </div>
 
     <div class="sec">
-      <label class="lab">覚えた薬剤名（自動・タップで削除）</label>
+      <label class="lab">覚えた薬剤名（自動・五十音順・タップで削除）</label>
+      <input id="learnedSearch" type="search" placeholder="🔍 薬剤名で検索" autocomplete="off" oninput="renderLearned()" style="margin-bottom:8px;">
       <div id="learnedList" class="chips"></div>
       <p class="hint">コピー／送信した薬剤名を自動で候補に覚えます。間違えて覚えた名前はタップで消せます。</p>
     </div>
@@ -300,7 +301,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-17.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-25.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1195,7 +1196,13 @@ function openSettings(){
 function renderLearned(){
   const box=$('learnedList'); if(!box) return;
   if(!learned.length){ box.innerHTML='<span class="hint">まだありません（コピー／送信すると覚えます）</span>'; return; }
-  box.innerHTML = learned.map((l,i)=>`
+  const q=(($('learnedSearch')||{}).value||'').trim().toLowerCase();
+  // 実配列のインデックス(i)を保持したまま、検索で絞り込み→五十音順で表示
+  let items=learned.map((l,i)=>({l,i}));
+  if(q) items=items.filter(o=>(o.l.name||'').toLowerCase().includes(q));
+  items.sort((a,b)=>(a.l.name||'').localeCompare(b.l.name||'','ja'));
+  if(!items.length){ box.innerHTML=`<span class="hint">「${esc(q)}」に一致する薬剤はありません</span>`; return; }
+  box.innerHTML = items.map(({l,i})=>`
     <div class="preset">
       <input class="pn" value="${esc(l.name)}" readonly style="flex:1;background:var(--card2)">
       <input class="ps lmg" data-i="${i}" inputmode="decimal" placeholder="mg/錠" value="${esc(l.mg||'')}">
