@@ -203,7 +203,7 @@
 </div>
 
 <div class="actions">
-  <button class="ball" onclick="doAllInOne()">⚡️ まとめて実行（コピー＋Slack＋処方箋）</button>
+  <button class="ball" onclick="doAllInOne()">⚡️ まとめて実行（コピー＋Slack）</button>
   <div class="actrow">
     <button class="b copy"  onclick="copyOut()">📋 コピー</button>
     <button class="b slack" onclick="sendSlack()">Slack</button>
@@ -223,7 +223,7 @@
     <div>
       <label class="lab">Slack Incoming Webhook URL</label>
       <input id="webhook" placeholder="https://hooks.slack.com/services/..." >
-      <p class="hint">処方専用チャンネル（例 #処方）のWebhookを推奨。ここに貼るとこのiPadだけに保存されます。</p>
+      <p class="hint" id="webhookHint">処方専用チャンネル（例 #処方）のWebhookを推奨。ここに貼るとこのiPadだけに保存されます。</p>
     </div>
 
     <div class="sec">
@@ -301,9 +301,21 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-25.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-29.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+
+// ─────────────────────────────────────────────────────────────
+// ラズパイ配信モード（院内 http://192.168.11.32:8670/ で開いたとき）
+//   ・Slack送信はラズパイが行う → WebhookのURLを端末に貼らなくていい
+//   ・覚えた薬剤/患者名簿/処方履歴/病院情報はラズパイに保存 → iPadを新しくしても残る
+//   GitHub Pages(…github.io) や file:// で開いたときは、今まで通り端末の中だけで動く
+// ─────────────────────────────────────────────────────────────
+const SERVER_MODE = /^https?:$/.test(location.protocol) && !/(^|\.)github\.io$/i.test(location.hostname);
+const SYNC_KEYS = ['rx_presets','rx_learned','rx_patients','rx_history','rx_clinic'];
+// 入力中の処方(rx_state)は端末ごと、Webhook(rx_settings)はラズパイが持つので共有しない
+let serverOk = false;   // ラズパイと通信できているか
+let srev = 0;           // ラズパイ側データの版（他端末との上書き事故を防ぐ）
 
 // ─────────────────────────────────────────────────────────────
 // 分数演算（0.1+0.2 のような浮動小数点誤差を避けるため厳密分数で計算）
@@ -382,16 +394,83 @@ const uid = ()=> 'r'+(_seq++);
 // ─────────────────────────────────────────────────────────────
 // 永続化（このiPad/ブラウザのlocalStorageのみ・外部送信なし）
 // ─────────────────────────────────────────────────────────────
+/** localStorageに書く。ラズパイ配信のときは、共有する項目だけラズパイにも預ける */
+function lsSet(k, v){
+  localStorage.setItem(k, v);
+  if(serverOk && SYNC_KEYS.includes(k)) syncSoon();
+}
+let _syncT=null, _syncing=false, _syncAgain=false;
+function syncSoon(){ clearTimeout(_syncT); _syncT=setTimeout(syncPush, 600); }
+function sharedPayload(){
+  const o={}; SYNC_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) o[k]=v; }); return o;
+}
+/** ラズパイ側のデータを、この端末の内容を消さずに取り込む（既存優先で足りない分だけ足す） */
+function mergeShared(st){
+  if(!st) return;
+  mergeImport(st);                                   // 覚えた薬・患者・プリセット（手入力を上書きしない）
+  if(typeof st.rx_history==='string'){               // 履歴は「まだ無いカルテ番号」だけ足す
+    try{
+      const inc=JSON.parse(st.rx_history)||{}, cur=historyGet();
+      for(const k in inc){ if(!(k in cur)) cur[k]=inc[k]; }
+      lsSet('rx_history', JSON.stringify(cur));
+    }catch(_){}
+  }
+  if(typeof st.rx_clinic==='string' && !localStorage.getItem('rx_clinic')) lsSet('rx_clinic', st.rx_clinic);
+  loadSharedFromLS();
+}
+async function syncPush(){
+  if(!serverOk) return;
+  if(_syncing){ _syncAgain=true; return; }
+  _syncing=true;
+  try{
+    const r = await fetch('api/state', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({rev:srev, state:sharedPayload()})});
+    if(r.status===409){                              // 他の端末が先に更新していた
+      const cur = await r.json();
+      srev = cur.rev || 0;
+      mergeShared(cur.state);                        // 相手の分を取り込んでから
+      refreshDatalist();
+      _syncAgain = true;                             // もう一度この端末の分を送る
+      return;
+    }
+    if(!r.ok) throw new Error('POST '+r.status);
+    srev = (await r.json()).rev;
+  }catch(_){
+    // つながらない時は端末のlocalStorageに残る（次に保存できた時にまとめて送られる）
+  }finally{
+    _syncing=false; if(_syncAgain){ _syncAgain=false; syncPush(); }
+  }
+}
+/** 起動時：ラズパイのデータを取りに行く（無ければこの端末の内容を預ける＝引っ越しの1回目） */
+async function syncBoot(){
+  if(!SERVER_MODE) return;
+  try{
+    const r = await fetch('api/state', {cache:'no-store'});
+    if(!r.ok) throw new Error('GET '+r.status);
+    const j = await r.json();
+    serverOk = true; srev = j.rev || 0;
+    const svHas = j.state && SYNC_KEYS.some(k => j.state[k]);
+    const lcHas = SYNC_KEYS.some(k => localStorage.getItem(k));
+    if(svHas && lcHas){ mergeShared(j.state); syncPush(); }          // 両方にある→合わせる
+    else if(svHas){                                                   // 端末は空＝そのまま受け取る
+      SYNC_KEYS.forEach(k=>{ if(typeof j.state[k]==='string') localStorage.setItem(k, j.state[k]); });
+      loadSharedFromLS();
+    }
+    else if(lcHas) await syncPush();                                  // ラズパイが空＝預ける
+    refreshDatalist(); updateRecallBtn();
+  }catch(_){ serverOk = false; }   // ラズパイに繋がらなくても、端末の中だけで今まで通り動く
+}
+
 function persist(){
   syncFromDom();
-  localStorage.setItem('rx_state', JSON.stringify({
+  lsSet('rx_state', JSON.stringify({
     karte:val('karte'), pname:val('pname'), weight:val('pweight'), pdate:val('pdate'),
     manualNote:($('manualNote')?.value ?? ''), rows
   }));
 }
-function persistPresets(){ localStorage.setItem('rx_presets', JSON.stringify(presets)); }
-function persistSettings(){ localStorage.setItem('rx_settings', JSON.stringify(settings)); }
-function persistLearned(){ localStorage.setItem('rx_learned', JSON.stringify(learned)); }
+function persistPresets(){ lsSet('rx_presets', JSON.stringify(presets)); }
+function persistSettings(){ lsSet('rx_settings', JSON.stringify(settings)); }
+function persistLearned(){ lsSet('rx_learned', JSON.stringify(learned)); }
 
 /** コピー/送信した処方の薬剤名を自動で候補に覚える（{name,mg}・新しいものを先頭へ・最大300件） */
 function learnNames(){
@@ -433,7 +512,7 @@ function autofillNote(r,el){
 
 // ── 処方履歴（カルテ番号ごと・この端末のlocalStorageのみ）─────────────────────
 function historyGet(){ try{ return JSON.parse(localStorage.getItem('rx_history')||'{}'); }catch(_){ return {}; } }
-function historySet(h){ localStorage.setItem('rx_history', JSON.stringify(h)); }
+function historySet(h){ lsSet('rx_history', JSON.stringify(h)); }
 /** コピー/送信した処方を、カルテ番号ごとに記録（直近と同一内容は重複保存しない・各カルテ最大10件） */
 function saveHistory(){
   const key=val('karte'); if(!key) return;
@@ -454,7 +533,7 @@ function saveHistory(){
 }
 // ── カルテ番号→患者名の記憶（この端末のlocalStorageのみ）──────────────────────
 function patientsGet(){ try{ return JSON.parse(localStorage.getItem('rx_patients')||'{}'); }catch(_){ return {}; } }
-function patientsSet(p){ localStorage.setItem('rx_patients', JSON.stringify(p)); }
+function patientsSet(p){ lsSet('rx_patients', JSON.stringify(p)); }
 let _nameAuto = false;   // 現在の名前が「自動入力されたもの」か（手入力ならfalse）
 
 // 全角で入力されても半角に自動変換（iPadの日本語キーボード対策）
@@ -553,13 +632,17 @@ function loadHistoryEntry(i){
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
 }
-function loadAll(){
+/** 共有する項目（覚えた薬・プリセット）をlocalStorageから読み直す。ラズパイから取り込んだ後にも呼ぶ */
+function loadSharedFromLS(){
   try{ presets = JSON.parse(localStorage.getItem('rx_presets')||'[]'); }catch(_){ presets=[]; }
   try{
     let raw = JSON.parse(localStorage.getItem('rx_learned')||'[]'); if(!Array.isArray(raw)) raw=[];
     // 旧形式（文字列の配列）→ {name,mg} に移行
     learned = raw.map(x => typeof x==='string' ? {name:x, mg:'', note:''} : {name:(x&&x.name)||'', mg:(x&&x.mg)||'', note:(x&&x.note)||''}).filter(x=>x.name);
   }catch(_){ learned=[]; }
+}
+function loadAll(){
+  loadSharedFromLS();
   try{ const s=JSON.parse(localStorage.getItem('rx_settings')||'{}');
        settings = { webhook: (s.webhook && s.webhook.trim()) ? s.webhook : DEFAULT_WEBHOOK }; }
   catch(_){ settings = { webhook: DEFAULT_WEBHOOK }; }
@@ -975,17 +1058,31 @@ function buildSlackText(){
   const mn = manualNoteVal();
   return head + '\n' + lines.map(l=>'・'+l).join('\n') + (mn ? '\n📝 '+mn : '');
 }
+/** Slackへ送れる状態か（ラズパイ配信ならラズパイが送るのでWebhookの登録は不要） */
+function slackReady(){ return serverOk || !!settings.webhook; }
+/** Slackへ送る。ラズパイ配信ならサーバ経由（成否がわかる）、そうでなければ端末から直接（投げっぱなし） */
+async function postSlack(text){
+  if(serverOk){
+    const r = await fetch('api/slack', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text }) });
+    if(!r.ok){
+      const j = await r.json().catch(()=>({}));
+      throw new Error(j.error || ('HTTP '+r.status));
+    }
+    return;
+  }
+  // ブラウザから直接Webhookを叩く場合はCORSのため no-cors（成否は受け取れない＝投げっぱなし）
+  await fetch(settings.webhook, { method:'POST', mode:'no-cors', body: JSON.stringify({ text }) });
+}
 function sendSlack(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
-  if(!settings.webhook){ toast('設定でSlack Webhookを登録してください'); openSettings(); return; }
+  if(!slackReady()){ toast('設定でSlack Webhookを登録してください'); openSettings(); return; }
   saveHistory();
   learnNames();
-  const text=buildSlackText();
-  // ブラウザからのWebhook投稿はCORSのため no-cors（成否は受け取れない＝投げっぱなし）
-  fetch(settings.webhook, { method:'POST', mode:'no-cors', body: JSON.stringify({ text }) })
+  postSlack(buildSlackText())
     .then(()=> toast('Slackへ送信しました'))
-    .catch(()=> toast('送信に失敗しました（Webhook URLを確認）'));
+    .catch(e=> toast('送信に失敗しました（'+((e&&e.message)||'Webhook URLを確認')+'）'));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1098,26 +1195,21 @@ function drawPrescription(g, W, H, drugs){
   if(cl.phone){ fy+=px(48); g.fillText('TEL '+cl.phone, W-M, fy); }
   g.textAlign='left';
 }
-/** ⚡️ まとめて実行：コピー → Slack → 処方箋（印刷）を1タップで。
- *  印刷の共有シートは「ユーザー操作」の最後に呼ぶ必要があるため、コピー/Slackを先に済ませてから処方箋を出す。 */
+/** ⚡️ まとめて実行：コピー → Slack を1タップで。
+ *  処方箋PDFはまだ実運用していないので含めない（🖨処方箋ボタンで個別に出せる・2026-07-29 院長の指示）。
+ *  ※ 処方箋を戻すときは、iOSの制約で共有シートは「ユーザー操作」の最後に呼ぶ必要がある＝
+ *    コピー/Slackを先に済ませてから await generatePrescription() を呼ぶこと。 */
 async function doAllInOne(){
   const lines=drugLines();
   if(!lines.length){ toast('計算できる薬剤がありません'); return; }
   saveHistory(); learnNames();
-  // 1) コピー（OneNote貼付用）— HTML(太字)+プレーンの両方を送る。共有シートの前に実行
+  // 1) コピー（OneNote貼付用）— HTML(太字)+プレーンの両方を送る
   copyRich();
-  // 2) Slack（Webhook設定時のみ・投げっぱなし）
-  if(settings.webhook){
-    try{ fetch(settings.webhook,{method:'POST',mode:'no-cors',body:JSON.stringify({text:buildSlackText()})}); }catch(_){}
+  // 2) Slack（送れる時のみ）
+  if(slackReady()){
+    try{ postSlack(buildSlackText()).catch(()=>{}); }catch(_){}
   }
-  // 3) 処方箋（チェック薬があれば印刷/共有シートを開く＝この操作が最後）
-  const drugs=rows.filter(r=> r.rxChecked!==false && (r.name||'').trim());
-  if(drugs.length){
-    toast(settings.webhook?'コピー＋Slack完了→処方箋を印刷':'コピー完了→処方箋を印刷（Slack未設定）');
-    await generatePrescription();
-  } else {
-    toast('コピー'+(settings.webhook?'＋Slack':'')+'完了（処方箋の対象薬なし）');
-  }
+  toast(slackReady()?'コピー＋Slack完了':'コピー完了（Slack未設定）');
 }
 async function generatePrescription(){
   const drugs=rows.filter(r=> r.rxChecked!==false && (r.name||'').trim());
@@ -1180,6 +1272,7 @@ function removeRow(id){
 function clearAll(){
   if(!confirm('この患者の入力をすべてクリアしますか？（薬剤プリセットと設定は残ります）')) return;
   setVal('karte',''); setVal('pname','');
+  setVal('pweight','');            // 体重も消す（次の患者に前の子の体重が残らないように）
   setVal('pdate', todayStr());
   setVal('manualNote','');
   rows=[blankRow()]; render(); persist(); updateRecallBtn(); toast('クリアしました');
@@ -1190,6 +1283,11 @@ function clearAll(){
 // ─────────────────────────────────────────────────────────────
 function openSettings(){
   $('webhook').value=settings.webhook||'';
+  const wh=$('webhookHint');
+  if(wh) wh.innerHTML = serverOk
+    ? '<b>院内サーバー（ラズパイ）に接続中です。</b>Slackへの送信はラズパイが行うので、ここは<b>空のままで構いません</b>。'
+      + '覚えた薬剤・患者名簿・処方履歴・病院情報もラズパイに保存されるので、iPadを新しくしてもそのまま使えます。'
+    : '処方専用チャンネル（例 #処方）のWebhookを推奨。ここに貼るとこの端末だけに保存されます。';
   const cl=getClinic(); $('c_name').value=cl.name||''; $('c_addr').value=cl.address||''; $('c_tel').value=cl.phone||'';
   renderPresets(); renderLearned(); $('settings').classList.add('open');
 }
@@ -1249,7 +1347,7 @@ function saveSettings(){
     name: row.querySelector('.pn').value.trim(),
     mg: row.querySelector('.ps').value.trim()
   })).filter(p=>p.name);
-  localStorage.setItem('rx_clinic', JSON.stringify({
+  lsSet('rx_clinic', JSON.stringify({
     name:$('c_name').value.trim(), address:$('c_addr').value.trim(), phone:$('c_tel').value.trim()
   }));
   persistSettings(); persistPresets();
@@ -1305,7 +1403,7 @@ function importData(file, mode){
       mergeImport(data);
     } else {
       if(!confirm('この端末のデータを、読み込んだファイルで置き換えます。よろしいですか？')) return;
-      BACKUP_KEYS.forEach(k=>{ if(typeof data[k]==='string') localStorage.setItem(k, data[k]); });
+      BACKUP_KEYS.forEach(k=>{ if(typeof data[k]==='string') lsSet(k, data[k]); });
     }
     toast('読み込みました。画面を更新します…');
     setTimeout(()=>location.reload(), 900);
@@ -1326,20 +1424,20 @@ function mergeImport(data){
       if(idx.has(x.name)){ const e=arr[idx.get(x.name)]; if(!e.mg && x.mg) e.mg=x.mg; if(!e.note && x.note) e.note=x.note; }
       else { arr.push(x); idx.set(x.name, arr.length-1); }
     });
-    localStorage.setItem('rx_learned', JSON.stringify(arr));
+    lsSet('rx_learned', JSON.stringify(arr));
   }
   // 患者（カルテNo一致で重複回避・既存の名前は保持）
   if(typeof data.rx_patients==='string'){
     const inc=parse(data.rx_patients)||{}, cur=parse(localStorage.getItem('rx_patients'))||{};
     for(const k in inc){ if(!(k in cur)) cur[k]=inc[k]; }
-    localStorage.setItem('rx_patients', JSON.stringify(cur));
+    lsSet('rx_patients', JSON.stringify(cur));
   }
   // 手動プリセット（name一致で重複回避）
   if(typeof data.rx_presets==='string'){
     const inc=parse(data.rx_presets)||[], cur=parse(localStorage.getItem('rx_presets'))||[];
     const have=new Set(cur.map(p=>p&&p.name));
     inc.forEach(p=>{ if(p&&p.name&&!have.has(p.name)){ cur.push(p); have.add(p.name); } });
-    localStorage.setItem('rx_presets', JSON.stringify(cur));
+    lsSet('rx_presets', JSON.stringify(cur));
   }
 }
 $('settings').addEventListener('click',e=>{ if(e.target===$('settings')) $('settings').classList.remove('open'); });
@@ -1360,6 +1458,7 @@ loadAll();
 render();
 refreshDatalist();
 updateRecallBtn();
+syncBoot();          // ラズパイ配信のときだけ、データをラズパイと合わせる
 
 // 開くたびに最新版を確認し、古いキャッシュなら自動で最新へ（iPadが古いまま残らないように）
 (function(){
