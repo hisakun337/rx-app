@@ -301,7 +301,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-29.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-07-29.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -970,20 +970,26 @@ function outHtml(){
   return table + note;
 }
 /** コピー：OneNoteで太字が効くようHTMLとプレーンの両方をクリップボードへ。非対応時はプレーンに自動フォールバック */
+/* ★クリップボードの制約（2026-07-29 院内ラズパイ版で発覚）
+   navigator.clipboard は「安全なページ」＝https と localhost でしか使えない。
+   院内LANの http://192.168.11.32:8670/ では **使えない** ので、
+   ①contenteditableを選択して execCommand（書式ごとコピーできる）
+   ②それも駄目なら「手で選んでコピーする枠」を出す、の順で必ず貼り付けられるようにする。 */
+const CLIP_OK = !!(navigator.clipboard && window.isSecureContext);
 function copyRich(){
   const plain = outPlain();
   const html  = outHtml();
-  if(navigator.clipboard && window.ClipboardItem && window.isSecureContext){
+  if(CLIP_OK && window.ClipboardItem){
     try{
       const item = new ClipboardItem({
         'text/plain': new Blob([plain], {type:'text/plain'}),
         'text/html':  new Blob([html],  {type:'text/html'})
       });
-      navigator.clipboard.write([item]).then(()=>toast('コピーしました'), ()=>copyText(plain));
+      navigator.clipboard.write([item]).then(()=>toast('コピーしました'), ()=>legacyCopy(html, plain));
       return;
     }catch(_){ /* 非対応 */ }
   }
-  copyText(plain);
+  legacyCopy(html, plain);          // httpのページはこちら（太字・2列の書式も保つ）
 }
 function onManualNote(){ persist(); renderPreview(); }
 function renderPreview(){
@@ -1032,23 +1038,54 @@ function copyOut(){
   copyRich();
 }
 function copyText(t){
-  if(navigator.clipboard && window.isSecureContext){
-    navigator.clipboard.writeText(t).then(()=>toast('コピーしました'), ()=>fallbackCopy(t));
-  } else fallbackCopy(t);
+  if(CLIP_OK){
+    navigator.clipboard.writeText(t).then(()=>toast('コピーしました'), ()=>legacyCopy(null, t));
+  } else legacyCopy(null, t);
 }
-function fallbackCopy(t){
-  // iOS Safari でも確実に選択→コピーできるよう range 選択方式にする
-  const ta=document.createElement('textarea');
-  ta.value=t; ta.readOnly=false; ta.contentEditable='true';
-  ta.style.position='fixed'; ta.style.top='0'; ta.style.left='0';
-  ta.style.width='1px'; ta.style.height='1px'; ta.style.opacity='0';
-  document.body.appendChild(ta);
-  const range=document.createRange(); range.selectNodeContents(ta);
-  const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
-  ta.setSelectionRange(0, t.length);
-  let done=false; try{ done=document.execCommand('copy'); }catch(_){}
-  sel.removeAllRanges(); ta.remove();
-  toast(done ? 'コピーしました' : 'コピーできません→下の枠を長押しでコピー');
+/** httpのページ用のコピー。html を渡すと書式（太字・2列）ごとコピーする。
+ *  iOSでは1px・opacity:0の要素だと選択が効かないことがあるので、
+ *  画面と同じ大きさの要素を一瞬だけ置いて選択する（同期処理なので描画はされない）。 */
+function legacyCopy(html, plain){
+  const box=document.createElement('div');
+  box.setAttribute('contenteditable','true');
+  if(html) box.innerHTML=html; else box.textContent=plain;
+  box.style.cssText='position:fixed;left:0;top:0;width:100%;height:auto;max-height:60vh;'
+    +'overflow:hidden;opacity:0.01;background:#fff;color:#000;font-size:16px;white-space:pre-wrap;'
+    +'-webkit-user-select:text;user-select:text;';
+  document.body.appendChild(box);
+  let done=false;
+  try{
+    const range=document.createRange(); range.selectNodeContents(box);
+    const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    done=document.execCommand('copy');
+    sel.removeAllRanges();
+  }catch(_){}
+  box.remove();
+  if(done){ toast('コピーしました'); return; }
+  manualCopy(plain);                // 自動でコピーできない端末＝手で選んでもらう
+}
+/** 最後の手段：枠を出して「長押し →『コピー』」してもらう（必ず貼り付けられる道を残す） */
+function manualCopy(t){
+  const old=document.getElementById('manualCopyBox'); if(old) old.remove();
+  const w=document.createElement('div');
+  w.id='manualCopyBox';
+  w.style.cssText='position:fixed;inset:0;background:rgba(20,24,28,.5);z-index:9999;display:flex;'
+    +'align-items:center;justify-content:center;padding:14px;';
+  w.innerHTML='<div style="background:#fff;color:#1a2140;border-radius:14px;padding:16px;'
+    +'max-width:620px;width:100%;max-height:88vh;overflow:auto">'
+    +'<div style="font-weight:700;margin-bottom:6px">下の枠を長押しして「すべてを選択」→「コピー」</div>'
+    +'<div style="font-size:12px;color:#6b7280;margin-bottom:8px">'
+    +'このページは院内LAN（http）のため、ボタンだけで自動コピーできませんでした。</div>'
+    +'<textarea id="manualCopyTa" style="width:100%;height:38vh;font-size:16px;padding:10px;'
+    +'border:1px solid #d7dbe3;border-radius:10px"></textarea>'
+    +'<button id="manualCopyClose" style="margin-top:10px;width:100%;padding:13px;border:none;'
+    +'border-radius:11px;background:#1d4ed8;color:#fff;font-size:15px;font-weight:700">閉じる</button></div>';
+  document.body.appendChild(w);
+  const ta=document.getElementById('manualCopyTa');
+  ta.value=t;
+  try{ ta.focus(); ta.setSelectionRange(0, t.length); }catch(_){}
+  document.getElementById('manualCopyClose').onclick=()=>w.remove();
+  w.addEventListener('click', e=>{ if(e.target===w) w.remove(); });
 }
 
 function buildSlackText(){
