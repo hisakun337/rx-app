@@ -133,6 +133,21 @@
   .hist-time{color:#6b7699;font-weight:600;white-space:nowrap;}
   .hist-lines{font-family:"SF Mono",ui-monospace,monospace;font-size:14px;color:var(--text);
     line-height:1.7;margin-bottom:9px;word-break:break-all;}
+  .hist-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;padding:3px 0;}
+  /* 古い履歴は薄くする（飲み終わっているのが普通なので、最新だけ目立てばよい） */
+  .hist-old{opacity:.62;}
+  /* 残薬バッジ。ok=通常(青) / soon=3日以下(赤) / done=飲み終わり(グレー) */
+  .rem-row{display:flex;align-items:center;gap:8px;margin:0 0 8px;flex-wrap:wrap;}
+  .rem{display:inline-block;padding:5px 12px;border-radius:999px;font-size:14px;font-weight:800;
+    font-family:-apple-system,sans-serif;}
+  .rem-ok{background:#e8f0ff;color:#1b45b8;border:1px solid #b9cdf7;}
+  .rem-soon{background:#ffe9e9;color:#b3261e;border:1px solid #f5b5b1;}
+  .rem-done{background:var(--chip);color:var(--muted);border:1px solid var(--line);}
+  .rem-note{font-size:12px;color:var(--muted);font-weight:700;font-family:-apple-system,sans-serif;}
+  .rem-inline{font-size:12px;font-weight:800;padding:2px 8px;border-radius:999px;
+    font-family:-apple-system,sans-serif;white-space:nowrap;}
+  .rem-start{font-size:12px;color:var(--muted);font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;}
+  .start .chip{min-width:78px;text-align:center;}
 
   #undobar{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);
     background:#22283f;border:1px solid var(--accent);color:#fff;padding:10px 12px 10px 16px;border-radius:12px;
@@ -159,11 +174,14 @@
   <div class="patient">
     <div class="fld" style="flex:0 0 150px;">
       <label class="lab">カルテ番号</label>
-      <input id="karte" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例 123-1" oninput="onKarteInput()">
+      <input id="karte" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="123401 または 名前" oninput="onKarteInput()">
     </div>
     <div class="fld">
       <label class="lab">患者名（任意）</label>
       <input id="pname" placeholder="例 ポチ" oninput="onNameInput()">
+    </div>
+    <div class="fld" style="flex:1 0 100%;order:99">
+      <div id="karteCands" style="font-size:12px;color:#5b6478"></div>
     </div>
     <div class="fld" style="flex:0 0 96px;">
       <label class="lab">体重 kg（確認用）</label>
@@ -189,6 +207,11 @@
       style="width:76px;padding:9px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:15px;text-align:center;">
     <button onclick="applyBulkDays()"
       style="padding:9px 14px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-weight:800;font-size:14px;">全薬に適用</button>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;margin:10px 0 0;flex-wrap:wrap;">
+    <span style="font-size:13px;color:var(--muted);font-weight:700;">⏰ 開始タイミングを一括</span>
+    <div class="chips start" id="bulkStart" style="margin-top:0;"></div>
   </div>
 
   <div class="outputbox">
@@ -298,10 +321,12 @@
 <div id="toast"></div>
 
 <script src="libs/jspdf.umd.min.js"></script>
+<!-- 院内共通のカルテ番号入力部品。繋がらなくても手入力で使える -->
+<script src="patient-input.js" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
 <script>
 'use strict';
 
-const APP_VERSION = '2026-07-29.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-06.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -380,6 +405,21 @@ const FREQS = [
   {key:'EOD', n:1, everyDays:2, jp:'2日に1回'},
   {key:'q3d', n:1, everyDays:3, jp:'3日に1回'},
 ];
+/* いつから飲み始めるか。★この4つに固定（TIDでもこの中から選ぶ運用）。
+   offset＝「本日朝」を0とした半日きざみの位置。残薬日数の計算に使う。 */
+const STARTS = [
+  {key:'todayAM',    jp:'本日朝から', offset:0},
+  {key:'todayPM',    jp:'本日夕から', offset:0.5},
+  {key:'tomorrowAM', jp:'明日朝から', offset:1},
+  {key:'tomorrowPM', jp:'明日夕から', offset:1.5},
+];
+const START_DEFAULT = 'todayPM';           // 新しい薬の初期値（日中の診察で夕から開始が一番多い）
+function startJp(key){ const s=STARTS.find(x=>x.key===key); return s?s.jp:''; }
+/* ★開始が記録されていない時は「本日朝から」(0)とみなす。
+   4つの中でいちばん残薬が少なく出る＝処方量を多めに見積もる側。
+   残薬を多く見積もると薬が切れる（抗てんかん薬・心臓の薬では危険）が、
+   少なく見積もれば余るだけなので、間違えるならこちら側にする。 */
+function startOffset(key){ const s=STARTS.find(x=>x.key===key); return s?s.offset:0; }
 // Slack送信先(Webhook)は公開リポジトリに置かない（Slackが自動失効させるため）。
 // 各iPadの「⚙︎設定」に貼り付け、その端末のlocalStorageにのみ保存する。
 const DEFAULT_WEBHOOK = '';
@@ -524,7 +564,13 @@ function saveHistory(){
   if(list[0] && (list[0].lines||[]).join('|')===sig) return;  // 直近と同じ→保存しない
   list.unshift({
     savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
-    rows: rows.map(r=>({mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage,note:r.note||'',rxChecked:r.rxChecked!==false})),
+    rows: rows.map(r=>{
+      const o={mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage,note:r.note||'',rxChecked:r.rxChecked!==false};
+      // ★開始タイミングは「選ばれている時だけ」書く。空欄を勝手に埋めると
+      //   「記録が無い」のか「本日朝からだった」のか後から区別できなくなる
+      if(STARTS.find(x=>x.key===r.startKey)) o.startKey=r.startKey;
+      return o;
+    }),
     lines
   });
   hist[key]=list.slice(0,10);
@@ -543,21 +589,112 @@ function toHalfWidth(s){
     .replace(/[－ー―‐‑–—−]/g, '-')
     .replace(/　/g, ' ');
 }
+/* カルテ番号を「4桁-2桁」に揃える（受付マスタの形）。
+   ★履歴(rx_history)は入力されたままの文字をキーにしてきたので、
+     古い書き方（123-1 など）で保存された履歴も引けるよう、両方の形で探す。 */
+function karteVariants(k){
+  const raw = String(k||'').trim();
+  const out = [raw];
+  if(typeof PatientInput !== 'undefined'){
+    const n = PatientInput.normalize(raw);
+    if(n && n !== raw) out.push(n);
+    // ゼロ埋めを外した形（0123-01 → 123-1）も試す
+    const m = /^(\d{4})-(\d{2})$/.exec(n||'');
+    if(m) out.push(String(+m[1]) + '-' + String(+m[2]));
+  }
+  return [...new Set(out.filter(Boolean))];
+}
+/** 覚えている名簿・履歴から、どの書き方でも引けるようにする */
+function pickByKarte(store, k){
+  for(const v of karteVariants(k)){ if(store[v] != null) return store[v]; }
+  return null;
+}
+
 function onKarteInput(){
   const el = $('karte');
+  // ★名前が打たれていたら「名前で探す」。整形（数字以外を消す処理）より先に判定すること。
+  //   先に整形すると「玉野」のような入力が消えてしまう。
+  const rawNow = el ? el.value : '';
+  if(rawNow && !/^[\d\s\-‐－ー−０-９]+$/.test(rawNow)){
+    searchKarteByName(rawNow); persist(); return;
+  }
+  if($('karteCands')) $('karteCands').innerHTML='';
+
   if(el){
-    const norm = toHalfWidth(el.value);
-    if(norm !== el.value){
+    // 数字だけ打たれたら自動でハイフンを入れる（123401 → 1234-01）
+    const before = el.value;
+    const norm = (typeof PatientInput !== 'undefined')
+      ? PatientInput.formatWhileTyping(before)
+      : toHalfWidth(before);
+    if(norm !== before){
+      // ★ハイフンが挿入されるとその分だけ文字数が増える。
+      //   カーソルを元の位置に戻すと挿入分ずれて「1437-10」のようになるので、増えた分だけ送る。
       const pos = el.selectionStart;
+      const shifted = Math.max(0, Math.min(norm.length, pos + (norm.length - before.length)));
       el.value = norm;
-      try{ el.setSelectionRange(pos, pos); }catch(e){}
+      try{ el.setSelectionRange(shifted, shifted); }catch(e){}
     }
   }
   const k = val('karte');
-  const pn = k ? patientsGet()[k] : null;
+  const pn = k ? pickByKarte(patientsGet(), k) : null;
   const nameEl = $('pname');
   if(pn){ nameEl.value = pn; _nameAuto = true; }          // 覚えているカルテ→名前を自動入力
   else if(_nameAuto){ nameEl.value = ''; _nameAuto = false; } // 自動入力名のまま別カルテへ→空にする
+
+  // 手元に無ければ院内の患者マスタ（患者情報API）に聞く
+  if(!pn && k) lookupPatientName(k);
+
+  persist(); updateRecallBtn();
+}
+
+/* 名前で患者を探して候補を出す。押すとカルテ番号と患者名が入る。
+   ★同姓同名がいても取り違えないよう、必ず候補から選ばせる。 */
+let _nameSearchTimer = null;
+function searchKarteByName(q){
+  const box = $('karteCands');
+  if(!box || typeof PatientInput === 'undefined') return;
+  clearTimeout(_nameSearchTimer);
+  if(q.trim().length < 2){ box.innerHTML=''; return; }
+  _nameSearchTimer = setTimeout(async ()=>{
+    box.textContent = '患者を探しています…';
+    const hits = await PatientInput.search(q.trim(), 10);
+    if(!hits.length){ box.textContent = `「${q}」に該当する患者が見つかりません`; return; }
+    box.innerHTML = '';
+    hits.forEach(p=>{
+      const b=document.createElement('button');
+      b.type='button';
+      b.style.cssText='font-size:12px;padding:4px 8px;margin:2px 4px 2px 0;border:1px solid var(--line,#ccd);border-radius:6px;background:#fff;cursor:pointer';
+      b.textContent = `${p.karte} ${p.name||''}`;
+      b.onclick = ()=>{
+        $('karte').value = p.karte;
+        $('pname').value = p.name || '';
+        _nameAuto = true;
+        const st = patientsGet(); st[p.karte] = p.name || ''; patientsSet(st);
+        box.textContent = `${p.karte}　${p.name||''}${p.species?' ・ '+p.species:''}${p.owner?'　飼主 '+p.owner:''}`;
+        persist(); updateRecallBtn();
+      };
+      box.appendChild(b);
+    });
+  }, 500);
+}
+
+/* 院内の患者情報API（ラズパイ:8740）から患者名を引いて入れる。
+   ★つながらない時（GitHub Pages版・院外など）は何もしない＝今までどおり手入力で使える。
+   ★引けた名前は rx_patients に覚えるので、次からは通信なしで出る。 */
+let _lookupSeq = 0;
+async function lookupPatientName(k){
+  if(typeof PatientInput === 'undefined') return;
+  const seq = ++_lookupSeq;
+  const res = await PatientInput.lookup(PatientInput.normalize(k));
+  if(seq !== _lookupSeq) return;            // 入力が進んでいたら古い結果は捨てる
+  if(!res || !res.patient) return;
+  const nameEl = $('pname');
+  if(nameEl.value && !_nameAuto) return;    // 手入力された名前は上書きしない
+  const key = val('karte');
+  if(!key) return;
+  nameEl.value = res.patient.name || '';
+  _nameAuto = true;
+  const p = patientsGet(); p[PatientInput.normalize(key)] = nameEl.value; patientsSet(p);
   persist(); updateRecallBtn();
 }
 function onNameInput(){
@@ -569,30 +706,61 @@ function onNameInput(){
 function onWeightInput(){ persist(); render(); }            // 体重変更→各薬のmg/kg確認を更新
 function updateRecallBtn(){
   const key=val('karte');
-  const list = key ? (historyGet()[key]||[]) : [];
+  const list = key ? (pickByKarte(historyGet(), key)||[]) : [];
   const bar=$('recallBar');
   if(list.length){ bar.style.display=''; $('recallCount').textContent='（'+list.length+'件）'; }
   else bar.style.display='none';
 }
 function openRecall(){
-  const key=val('karte'); const list = key ? (historyGet()[key]||[]) : [];
+  const key=val('karte'); const list = key ? (pickByKarte(historyGet(), key)||[]) : [];
   const box=$('recallList');
   if(!list.length){
     box.innerHTML='<p class="hint">このカルテ番号の履歴はまだありません。<br>カルテ番号を入れて「コピー」か「Slックへ送信」をすると記録されます。</p>';
   } else {
     box.innerHTML = list.map((e,i)=>`
-      <div class="hist">
+      <div class="hist${i>0?' hist-old':''}">
         <div class="hist-head">
           <span>${esc(e.date||'')}${e.pname?(' ・ '+esc(e.pname)):''}</span>
           <span class="hist-time">${new Date(e.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
         </div>
-        <div class="hist-lines">${(e.lines||[]).map(esc).join('<br>')}</div>
+        ${histBadge(e)}
+        <div class="hist-lines">${histLinesHtml(e)}</div>
         <button class="smallbtn" onclick="loadHistoryEntry(${i})">この処方を読み込む</button>
-      </div>`).join('');
+      </div>`).join('')
+      + `<p class="hint" style="margin-top:10px;">「残り目安」は<b>処方日・日数・開始タイミングから計算した理論値</b>です。
+         飲み忘れやこぼしで実際とはズレます。次に何日分出すかの目安としてお使いください。</p>`;
   }
   $('recall').classList.add('open');
 }
 function closeRecall(){ $('recall').classList.remove('open'); }
+/** 履歴カードの見出しバッジ＝いちばん早く切れる薬の残薬 */
+function histBadge(e){
+  const r=remainForEntry(e);
+  if(r.future) return `<div class="rem-row"><span class="rem rem-done">処方日を確認してください</span></div>`;
+  if(!r.min) return '';
+  const note = r.min.known ? '' : '<span class="rem-note">※開始未記録</span>';
+  const label = r.min.days<=0 ? '飲み終わり' : `残り目安 ${remainLabel(r.min)}`;
+  return `<div class="rem-row"><span class="rem rem-${remainTone(r.min)}">${label}</span>${note}</div>`;
+}
+/** 履歴の薬一覧。★lines[]とrows[]は件数が一致しない（薬剤名や1回量が空の行はlinesに出ない）ので、
+ *  残薬を並べるときは rows[] から作り直す。rowsを持たない大昔の履歴は lines をそのまま出す。 */
+function histLinesHtml(e){
+  const rowsArr = e && e.rows;
+  if(!Array.isArray(rowsArr) || !rowsArr.length) return (e.lines||[]).map(esc).join('<br>');
+  const rxDate = e.date || (e.savedAt||'').slice(0,10);
+  const out = rowsArr.map(r=>{
+    const o=_lineParts(r); if(!o) return null;                   // 出力されなかった行は履歴でも出さない
+    const rem=remainDays(r, rxDate);
+    let tail='';
+    if(rem && !rem.future){
+      const txt = rem.days<=0 ? '飲み終わり' : `残り${remainLabel(rem)}`;
+      tail = `<span class="rem-inline rem-${remainTone(rem)}">${txt}</span>`;
+    }
+    const st = startJp(r.startKey);
+    return `<div class="hist-line">${esc(o.text)}${st?`<span class="rem-start">${esc(st)}</span>`:''}${tail}</div>`;
+  }).filter(Boolean);
+  return out.length ? out.join('') : (e.lines||[]).map(esc).join('<br>');
+}
 
 // ── 薬剤を一覧から選ぶ（キーボード予測と競合しない確実な選択）───────────────
 let _pickTarget=null;
@@ -621,13 +789,18 @@ function renderPickList(query){
 }
 function closeDrugPick(){ $('drugpick').classList.remove('open'); }
 function loadHistoryEntry(i){
-  const key=val('karte'); const e=(historyGet()[key]||[])[i];
+  // ★一覧(openRecall)と同じ引き方に揃える。生のキーで引くと
+  //   カルテ番号の書き方が違う時に「一覧には出るのに読み込むと空」になっていた
+  const key=val('karte'); const e=((key && pickByKarte(historyGet(), key))||[])[i];
   if(!e) return;
   const hasData = rows.some(r=>r.name||r.dose||r.days||r.qty||r.usage);
   if(hasData && !confirm('今の入力を、選んだ前回処方で置き換えますか？')) return;
   if(e.pname!=null){ setVal('pname', e.pname); _nameAuto=true; }  // 日付は今日のまま（今日出し直す用途のため上書きしない）
   rows = (e.rows||[]).map(r=>({ id:uid(), mode:r.mode||'calc', name:r.name||'', dose:r.dose||'', unit:r.unit||'T', freq:r.freq||3,
-    freqKey:r.freqKey||'SID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', note:r.note||'', rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'' }));
+    freqKey:r.freqKey||'SID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', note:r.note||'',
+    // ★古い履歴には開始タイミングが無い。既定値で埋めず、選び直してもらう（未選択のまま出す）
+    startKey: (STARTS.find(x=>x.key===r.startKey) ? r.startKey : ''),
+    rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'' }));
   if(!rows.length) rows=[blankRow()];
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
@@ -654,9 +827,14 @@ function loadAll(){
   setVal('pdate', todayStr());   // 発行日は開くたび今日に（手動で変更は可）
   setVal('manualNote', st.manualNote||'');
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
-  rows.forEach(r=>{ if(!r.id) r.id=uid(); });
+  rows.forEach(r=>{
+    if(!r.id) r.id=uid();
+    // ★入力途中の保存に開始タイミングが無い場合（このアプリを更新した直後）は
+    //   既定値を入れておく。履歴と違い「今から出す処方」なので選ばせた方が親切
+    if(r.startKey===undefined) r.startKey=START_DEFAULT;
+  });
 }
-function blankRow(){ return { id:uid(), mode:'calc', name:'', dose:'', unit:'T', freq:1, freqKey:'SID', freqEvery:1, days:'', qty:'', funit:'個', usage:'', note:'', rxChecked:true, doseOpen:false, w:'', mgkg:'' }; }
+function blankRow(){ return { id:uid(), mode:'calc', name:'', dose:'', unit:'T', freq:1, freqKey:'SID', freqEvery:1, days:'', startKey:START_DEFAULT, qty:'', funit:'個', usage:'', note:'', rxChecked:true, doseOpen:false, w:'', mgkg:'' }; }
 
 // ─────────────────────────────────────────────────────────────
 // DOMヘルパー
@@ -679,9 +857,71 @@ function calcRow(r){
   const total = dose.mulInt(doses);
   return { dose, days, total, doses };
 }
+/* ── 残薬日数（理論値）─────────────────────────────────────────
+   残薬 ＝ 開始オフセット ＋ 処方日数 − 経過日数
+     経過日数 ＝ 来院日(今日) − 処方日
+     「今日の分を含めて、あと何日分あるか」を表す。
+   ★頻度(SID/BID/TID/EOD)は使わない。「日数」が既に暦日を表しているので、
+     TIDでもEODでも同じ式で正しく出る（calcRowがEODを⌈日数/2⌉回で錠数にしているのと同じ前提）。
+   ★飲み忘れ・こぼしは追えない＝あくまで理論値。 */
+function daysBetween(fromStr, toStr){
+  const a=new Date(fromStr+'T00:00'), b=new Date(toStr+'T00:00');
+  if(isNaN(a)||isNaN(b)) return null;
+  return Math.round((b-a)/86400000);
+}
+/** 1薬剤の残薬を返す。計算できない時は null（定量薬・日数なし・日付が変など） */
+function remainDays(row, rxDate, today){
+  if(!row || (row.mode||'calc')==='fixed') return null;      // 定量・外用は日数が無い
+  const d = parseInt(row.days,10);
+  if(!d || d<=0) return null;
+  const elapsed = daysBetween(rxDate, today||todayStr());
+  if(elapsed===null) return null;
+  if(elapsed<0) return {future:true};                        // 処方日が未来＝打ち間違い
+  const known = !!STARTS.find(x=>x.key===row.startKey);
+  const left = startOffset(row.startKey) + d - elapsed;
+  return {days: left, known, elapsed, total: d};
+}
+/** 履歴1件ぶんの残薬。薬ごとの結果と、いちばん早く切れるものを返す */
+function remainForEntry(entry, today){
+  const rxDate = entry && (entry.date || (entry.savedAt||'').slice(0,10));
+  const list = (entry && entry.rows) || [];
+  const each = list.map(r => remainDays(r, rxDate, today));
+  const valid = each.filter(x => x && !x.future && typeof x.days === 'number');
+  if(!valid.length) return {each, min:null, future: each.some(x=>x&&x.future)};
+  const min = valid.reduce((a,b)=> b.days < a.days ? b : a);
+  return {each, min, future:false};
+}
+/** 「6.5日分」のように表示（0.5きざみ）。0以下は飲み終わり */
+function remainLabel(r){
+  if(!r || typeof r.days !== 'number') return '';
+  if(r.days <= 0) return '飲み終わり';
+  const n = Math.round(r.days*2)/2;
+  return `${n%1===0 ? n : n.toFixed(1)}日分`;
+}
+/** バッジの色分け: 0以下=グレー / 3日以下=赤 / それ以外=青 */
+function remainTone(r){
+  if(!r || typeof r.days !== 'number') return 'done';
+  if(r.days <= 0) return 'done';
+  return r.days <= 3 ? 'soon' : 'ok';
+}
+
 /** 1薬剤を {text:プレーン, left:左列HTML, right:右列HTML(太字対象), html:1行版} で返す。
  *  right=「合計錠数/日数」等の強調部分。テーブル化で左揃え・列そろえに使う。 */
-function _lineParts(r){
+/* 開始タイミングの出し方を決める。
+     uniform = 出力される薬が全部同じ開始 → まとめて1行にする（行が長くならない）
+     mixed   = 薬によって違う          → 薬ごとに（本日夕から）を付ける
+     none    = どれにも記録が無い       → 何も出さない（無いものは書かない） */
+function startMode(){
+  const keys = rows.filter(r=>_lineParts(r))
+                   .map(r=>r.startKey).filter(k=>STARTS.find(x=>x.key===k));
+  if(!keys.length) return {mode:'none', key:''};
+  const uniq=[...new Set(keys)];
+  // 一部の薬にしか記録が無いときも、取り違えを防ぐため薬ごとに書く
+  const all = rows.filter(r=>_lineParts(r)).length;
+  if(uniq.length===1 && keys.length===all) return {mode:'uniform', key:uniq[0]};
+  return {mode:'mixed', key:''};
+}
+function _lineParts(r, withStart){
   const name = (r.name||'').trim() || '（薬剤名）';
   const E = s => esc(String(s));
   const GAP = '　';   // プレーン用：薬剤名と数量の間の全角スペース
@@ -715,17 +955,29 @@ function _lineParts(r){
       else { text=head; }
     }
   }
-  const html = right ? `${left}${GAP}<b>${right}</b>` : left;
-  return {text, left, right, html};
+  // 薬ごとに開始タイミングを付ける場合（薬によって違うとき）。
+  // ★太字は「合計」だけに掛けたいので、開始タイミングは right に混ぜず別枠で持つ
+  let startSuffix='';
+  if(withStart){
+    const st=startJp(r.startKey);
+    if(st){ text += `（${st}）`; startSuffix = `（${E(st)}）`; }
+  }
+  const bold = right ? `<b>${right}</b>` : '';
+  const html = (bold || startSuffix) ? `${left}${GAP}${bold}${startSuffix}` : left;
+  return {text, left, right, startSuffix, html};
 }
 function lineFor(r){ const o=_lineParts(r); return o?o.text:null; }
 /** 貼付用：2列テーブル（左=処方内容 / 右=合計を太字・左揃え）。セル余白で行間も確保 */
 function drugTableHtml(){
-  const trs = rows.map(r=>{ const o=_lineParts(r); if(!o) return null;
+  const sm=startMode();
+  const trs = rows.map(r=>{ const o=_lineParts(r, sm.mode==='mixed'); if(!o) return null;
     return `<tr><td style="border:none;padding:11px 34px 11px 0;white-space:nowrap;vertical-align:top">${o.left}</td>`+
-           `<td style="border:none;padding:11px 0;white-space:nowrap;vertical-align:top">${o.right?`<b>${o.right}</b>`:''}</td></tr>`;
-  }).filter(Boolean).join('');
-  return `<table style="border-collapse:collapse;border:none;font-family:-apple-system,sans-serif;font-size:15px;line-height:1.5">${trs}</table>`;
+           `<td style="border:none;padding:11px 0;white-space:nowrap;vertical-align:top">${o.right?`<b>${o.right}</b>`:''}${o.startSuffix||''}</td></tr>`;
+  }).filter(Boolean);
+  // 全部同じ開始なら、表の下に1行だけ添える
+  if(trs.length && sm.mode==='uniform')
+    trs.push(`<tr><td colspan="2" style="border:none;padding:4px 0 11px;">※${esc(startJp(sm.key))}</td></tr>`);
+  return `<table style="border-collapse:collapse;border:none;font-family:-apple-system,sans-serif;font-size:15px;line-height:1.5">${trs.join('')}</table>`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -767,6 +1019,12 @@ function drugEl(r, idx=0, total=1){
         <div class="chips">
           ${['5','7','10','14','20','30'].map(v=>`<button class="chip f-daychip" data-v="${v}">${v}</button>`).join('')}
         </div>
+      </div>
+    </div>
+    <div style="margin-top:10px;">
+      <label class="lab">いつから飲み始めるか</label>
+      <div class="chips start f-start">
+        ${STARTS.map(s=>`<button class="chip ${r.startKey===s.key?'on':''}" data-k="${s.key}">${s.jp}</button>`).join('')}
       </div>
     </div>`;
 
@@ -855,6 +1113,12 @@ function drugEl(r, idx=0, total=1){
     q('.f-freq').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
       r.freq=+c.dataset.n; r.freqKey=c.dataset.k; r.freqEvery=+c.dataset.e;
       q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+      updateOut(r,el); persist(); renderPreview();
+    }));
+    // いつから飲み始めるか（もう一度押すと選択解除＝記録しない）
+    q('.f-start').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+      r.startKey = (r.startKey===c.dataset.k) ? '' : c.dataset.k;
+      q('.f-start').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.dataset.k===r.startKey));
       updateOut(r,el); persist(); renderPreview();
     }));
     const help=q('.dosehelp'), tgl=q('.f-toggle');
@@ -947,11 +1211,15 @@ function doseHelp(el, w, mgkg, mg, apply){
 // プレビュー・コピー・Slack
 // ─────────────────────────────────────────────────────────────
 function drugLines(){
-  return rows.map(lineFor).filter(Boolean);
+  const sm=startMode();
+  const out=rows.map(r=>{ const o=_lineParts(r, sm.mode==='mixed'); return o?o.text:null; }).filter(Boolean);
+  if(out.length && sm.mode==='uniform') out.push(`※${startJp(sm.key)}`);
+  return out;
 }
 /** リッチ表示用（合計/数量を<b>太字</b>にしたHTML行）*/
 function drugLinesHtml(){
-  return rows.map(r=>{ const o=_lineParts(r); return o?o.html:null; }).filter(Boolean);
+  const sm=startMode();
+  return rows.map(r=>{ const o=_lineParts(r, sm.mode==='mixed'); return o?o.html:null; }).filter(Boolean);
 }
 /** 手動メモ（備考など・自由記入）。前後の空白のみ除去し内部の改行は保持 */
 function manualNoteVal(){ return ($('manualNote')?.value ?? '').replace(/^\s+|\s+$/g,''); }
@@ -1145,6 +1413,9 @@ function rxJp(r){
   const doseTxt = parsed ? (doseDisp(parsed, r.unit)+unitJp) : doseRaw;   // 1/4錠 / 0.25ml / 小さじ1/4杯
   let usage = doseTxt ? `${doseTxt}　${freqJp}` : freqJp;
   if(days>0) usage += `　${days}日分`;
+  // 開始タイミングは紙に残るので、処方箋では薬ごとに必ず書く
+  const st = startJp(r.startKey);
+  if(st) usage += `　${st}`;
   let total='';
   const c=calcRow(r);
   if(parsed && c && days>0) total = `合計 ${fmtNum(c.total.toNumber())}${unitJp}`;
@@ -1289,6 +1560,20 @@ function applyBulkDays(){
   targets.forEach(r=> r.days=v);
   render(); persist(); renderPreview();
   toast(`${targets.length}件の処方日数を ${v}日 にしました`);
+}
+/** 開始タイミングを全部の薬に適用（複数の薬はほぼ同じタイミングで始めるため） */
+function applyBulkStart(key){
+  if(!STARTS.find(x=>x.key===key)) return;
+  const targets=rows.filter(r=> (r.mode||'calc')!=='fixed');   // 定量・外用は日数が無いので対象外
+  if(!targets.length){ toast('開始タイミングを設定できる薬剤がありません'); return; }
+  targets.forEach(r=> r.startKey=key);
+  render(); persist(); renderPreview();
+  toast(`${targets.length}件を「${startJp(key)}」にしました`);
+}
+function renderBulkStart(){
+  const box=$('bulkStart'); if(!box) return;
+  box.innerHTML=STARTS.map(s=>`<button class="chip" data-k="${s.key}">${s.jp}</button>`).join('');
+  box.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>applyBulkStart(c.dataset.k)));
 }
 function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
   // 追加した薬剤名にフォーカス
@@ -1493,6 +1778,7 @@ function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
 // ─────────────────────────────────────────────────────────────
 loadAll();
 render();
+renderBulkStart();
 refreshDatalist();
 updateRecallBtn();
 syncBoot();          // ラズパイ配信のときだけ、データをラズパイと合わせる
