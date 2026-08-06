@@ -329,7 +329,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-06.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-06.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -834,10 +834,19 @@ function loadAll(){
   setVal('pdate', todayStr());   // 発行日は開くたび今日に（手動で変更は可）
   setVal('manualNote', st.manualNote||'');
   rows = Array.isArray(st.rows) && st.rows.length ? st.rows : [ blankRow() ];
+  /* ★1回だけの後片付け（2026-08-06）
+     既定値が「本日夕から」だった版(2026-08-06.1)を開いた端末では、入力途中の行に
+     本人が選んでいない `todayPM` が保存されてしまっている。既定を「指定なし」に変えても
+     その行だけ古い既定値が残り続けるので、**入力途中の行に限り**1回だけ空に戻す。
+     ★履歴(rx_history)には触らない。あちらは実際に出した処方の記録なので消してはいけない。 */
+  try{
+    if(!localStorage.getItem('rx_startfix')){
+      rows.forEach(r=>{ if(r.startKey==='todayPM') r.startKey=''; });
+      localStorage.setItem('rx_startfix','1');
+    }
+  }catch(_){}
   rows.forEach(r=>{
     if(!r.id) r.id=uid();
-    // ★入力途中の保存に開始タイミングが無い場合（このアプリを更新した直後）は
-    //   既定値を入れておく。履歴と違い「今から出す処方」なので選ばせた方が親切
     if(r.startKey===undefined) r.startKey=START_DEFAULT;
   });
 }
