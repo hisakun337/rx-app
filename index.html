@@ -148,6 +148,9 @@
     font-family:-apple-system,sans-serif;white-space:nowrap;}
   .rem-start{font-size:12px;color:var(--muted);font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;}
   .start .chip{min-width:78px;text-align:center;}
+  /* 「指定なし」は他の4つと種類が違うので、選択中でなければ薄く見せる */
+  .start .chip-none{opacity:.75;}
+  .start .chip-none.on{opacity:1;}
 
   #undobar{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);
     background:#22283f;border:1px solid var(--accent);color:#fff;padding:10px 12px 10px 16px;border-radius:12px;
@@ -326,7 +329,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-06.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-06.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -413,7 +416,10 @@ const STARTS = [
   {key:'tomorrowAM', jp:'明日朝から', offset:1},
   {key:'tomorrowPM', jp:'明日夕から', offset:1.5},
 ];
-const START_DEFAULT = 'todayPM';           // 新しい薬の初期値（日中の診察で夕から開始が一番多い）
+/* 新しい薬の初期値＝「指定なし」。
+   ★「指定なし」は STARTS に入れず空文字 '' で表す。STARTSに入れると
+     「開始が選ばれている」と判定する箇所（保存・出力・残薬のknown判定）が全部狂う。 */
+const START_DEFAULT = '';
 function startJp(key){ const s=STARTS.find(x=>x.key===key); return s?s.jp:''; }
 /* ★開始が記録されていない時は「本日朝から」(0)とみなす。
    4つの中でいちばん残薬が少なく出る＝処方量を多めに見積もる側。
@@ -728,7 +734,8 @@ function openRecall(){
         <button class="smallbtn" onclick="loadHistoryEntry(${i})">この処方を読み込む</button>
       </div>`).join('')
       + `<p class="hint" style="margin-top:10px;">「残り目安」は<b>処方日・日数・開始タイミングから計算した理論値</b>です。
-         飲み忘れやこぼしで実際とはズレます。次に何日分出すかの目安としてお使いください。</p>`;
+         飲み忘れやこぼしで実際とはズレます。次に何日分出すかの目安としてお使いください。<br>
+         開始タイミングを指定していない処方は<b>「本日朝から」として計算</b>します（残りを少なめに見積もる側です）。</p>`;
   }
   $('recall').classList.add('open');
 }
@@ -738,7 +745,7 @@ function histBadge(e){
   const r=remainForEntry(e);
   if(r.future) return `<div class="rem-row"><span class="rem rem-done">処方日を確認してください</span></div>`;
   if(!r.min) return '';
-  const note = r.min.known ? '' : '<span class="rem-note">※開始未記録</span>';
+  const note = r.min.known ? '' : '<span class="rem-note">※開始の指定なし（本日朝からとして計算）</span>';
   const label = r.min.days<=0 ? '飲み終わり' : `残り目安 ${remainLabel(r.min)}`;
   return `<div class="rem-row"><span class="rem rem-${remainTone(r.min)}">${label}</span>${note}</div>`;
 }
@@ -1024,6 +1031,7 @@ function drugEl(r, idx=0, total=1){
     <div style="margin-top:10px;">
       <label class="lab">いつから飲み始めるか</label>
       <div class="chips start f-start">
+        <button class="chip ${!STARTS.find(x=>x.key===r.startKey)?'on':''} chip-none" data-k="">指定なし</button>
         ${STARTS.map(s=>`<button class="chip ${r.startKey===s.key?'on':''}" data-k="${s.key}">${s.jp}</button>`).join('')}
       </div>
     </div>`;
@@ -1115,10 +1123,11 @@ function drugEl(r, idx=0, total=1){
       q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
       updateOut(r,el); persist(); renderPreview();
     }));
-    // いつから飲み始めるか（もう一度押すと選択解除＝記録しない）
+    // いつから飲み始めるか（「指定なし」＝空文字。指定しない処方も多いので既定はこちら）
     q('.f-start').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
-      r.startKey = (r.startKey===c.dataset.k) ? '' : c.dataset.k;
-      q('.f-start').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.dataset.k===r.startKey));
+      r.startKey = c.dataset.k;
+      const cur = STARTS.find(x=>x.key===r.startKey) ? r.startKey : '';
+      q('.f-start').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.dataset.k===cur));
       updateOut(r,el); persist(); renderPreview();
     }));
     const help=q('.dosehelp'), tgl=q('.f-toggle');
@@ -1563,16 +1572,18 @@ function applyBulkDays(){
 }
 /** 開始タイミングを全部の薬に適用（複数の薬はほぼ同じタイミングで始めるため） */
 function applyBulkStart(key){
-  if(!STARTS.find(x=>x.key===key)) return;
+  const known = STARTS.find(x=>x.key===key);
+  if(key !== '' && !known) return;                            // '' ＝ 指定なし は通す
   const targets=rows.filter(r=> (r.mode||'calc')!=='fixed');   // 定量・外用は日数が無いので対象外
   if(!targets.length){ toast('開始タイミングを設定できる薬剤がありません'); return; }
   targets.forEach(r=> r.startKey=key);
   render(); persist(); renderPreview();
-  toast(`${targets.length}件を「${startJp(key)}」にしました`);
+  toast(`${targets.length}件を「${known?known.jp:'指定なし'}」にしました`);
 }
 function renderBulkStart(){
   const box=$('bulkStart'); if(!box) return;
-  box.innerHTML=STARTS.map(s=>`<button class="chip" data-k="${s.key}">${s.jp}</button>`).join('');
+  box.innerHTML=`<button class="chip chip-none" data-k="">指定なし</button>`
+    + STARTS.map(s=>`<button class="chip" data-k="${s.key}">${s.jp}</button>`).join('');
   box.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>applyBulkStart(c.dataset.k)));
 }
 function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
