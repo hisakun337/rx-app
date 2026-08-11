@@ -147,6 +147,15 @@
   .rem-inline{font-size:12px;font-weight:800;padding:2px 8px;border-radius:999px;
     font-family:-apple-system,sans-serif;white-space:nowrap;}
   .rem-start{font-size:12px;color:var(--muted);font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;}
+  /* 体重の共有（体重ハブ） */
+  .wshare{flex:0 0 auto;background:var(--card2);border:1px solid var(--line);color:var(--text);
+    border-radius:8px;padding:8px 9px;font-size:14px;line-height:1;cursor:pointer;}
+  .wshare.on{background:#1a7a45;border-color:#1a7a45;color:#fff;}
+  .wbadge{font-size:11px;font-weight:700;margin:3px 0 0 2px;line-height:1.4;}
+  .wbadge.ok{color:#1a7a45;}
+  .wbadge.warn{color:#a15c00;}
+  .wuse{background:#fff5e0;border:1px solid #e0b060;color:#a15c00;border-radius:7px;
+    padding:4px 8px;font-size:11px;font-weight:800;cursor:pointer;text-align:left;}
   .start .chip{min-width:78px;text-align:center;}
   /* 「指定なし」は他の4つと種類が違うので、選択中でなければ薄く見せる */
   .start .chip-none{opacity:.75;}
@@ -186,9 +195,14 @@
     <div class="fld" style="flex:1 0 100%;order:99">
       <div id="karteCands" style="font-size:12px;color:#5b6478"></div>
     </div>
-    <div class="fld" style="flex:0 0 96px;">
+    <div class="fld" style="flex:0 0 168px;">
       <label class="lab">体重 kg（確認用）</label>
-      <input id="pweight" inputmode="decimal" placeholder="例 5" oninput="onWeightInput()">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="pweight" inputmode="decimal" placeholder="例 5" oninput="onWeightInput()" style="flex:1 1 auto;min-width:0;">
+        <button type="button" id="wshare" class="wshare" onclick="shareWeight()"
+          title="この体重を院内の他のアプリでも使えるようにする">💾</button>
+      </div>
+      <div id="wbadge" class="wbadge"></div>
     </div>
     <div class="fld" style="flex:0 0 130px;">
       <label class="lab">日付</label>
@@ -325,11 +339,11 @@
 
 <script src="libs/jspdf.umd.min.js"></script>
 <!-- 院内共通のカルテ番号入力部品。繋がらなくても手入力で使える -->
-<script src="patient-input.js" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
+<script src="patient-input.js?v=20260812" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-06.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-12.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -647,8 +661,21 @@ function onKarteInput(){
   if(pn){ nameEl.value = pn; _nameAuto = true; }          // 覚えているカルテ→名前を自動入力
   else if(_nameAuto){ nameEl.value = ''; _nameAuto = false; } // 自動入力名のまま別カルテへ→空にする
 
-  // 手元に無ければ院内の患者マスタ（患者情報API）に聞く
-  if(!pn && k) lookupPatientName(k);
+  // 別のカルテ番号に変わったら、自動で入れた体重は消す（前の子の体重を残さない）
+  if(k !== _weightKarte){
+    _weightKarte = k;
+    if(_weightAuto && $('pweight')){ $('pweight').value = ''; _weightAuto = false; }
+    const b = $('wbadge'); if(b){ b.textContent=''; b.className='wbadge'; }
+    const s = $('wshare'); if(s) s.classList.remove('on');
+  }
+
+  // 院内の患者マスタ（患者情報API）に聞く。
+  // ★名前を覚えている常連さんでも聞く（体重は名簿に無く、APIにしかないため）。
+  //   ただし番号が「4桁-2桁」に揃ってからにする（1文字ごとに聞かない）。
+  if(k && /^\d{4}-\d{2}$/.test(
+      (typeof PatientInput !== 'undefined') ? (PatientInput.normalize(k) || '') : k)) {
+    lookupPatientName(k);
+  }
 
   persist(); updateRecallBtn();
 }
@@ -694,10 +721,11 @@ async function lookupPatientName(k){
   const res = await PatientInput.lookup(PatientInput.normalize(k));
   if(seq !== _lookupSeq) return;            // 入力が進んでいたら古い結果は捨てる
   if(!res || !res.patient) return;
-  const nameEl = $('pname');
-  if(nameEl.value && !_nameAuto) return;    // 手入力された名前は上書きしない
   const key = val('karte');
   if(!key) return;
+  showSharedWeight(res.patient.weight || null);   // ★院内で共有されている体重（あれば）
+  const nameEl = $('pname');
+  if(nameEl.value && !_nameAuto) return;    // 手入力された名前は上書きしない
   nameEl.value = res.patient.name || '';
   _nameAuto = true;
   const p = patientsGet(); p[PatientInput.normalize(key)] = nameEl.value; patientsSet(p);
@@ -709,7 +737,61 @@ function onNameInput(){
   if(k && n){ const p = patientsGet(); p[k] = n; patientsSet(p); }  // カルテ番号があれば名前を覚える
   persist();
 }
-function onWeightInput(){ persist(); render(); }            // 体重変更→各薬のmg/kg確認を更新
+function onWeightInput(){                                    // 体重変更→各薬のmg/kg確認を更新
+  _weightAuto = false;                                       // 手で打たれた
+  const b = $('wbadge'); if(b){ b.textContent=''; b.className='wbadge'; }
+  const s = $('wshare'); if(s) s.classList.remove('on');
+  persist(); render();
+}
+
+/* ═══ 体重ハブ（患者情報API 8740 と共有する） ═══════════════════
+   ★古い体重を黙って入れない。
+     半年前の体重でmg/kgを確認してしまうのがいちばん危ないので、
+     新しい体重だけ自動で入れ、古いものは「押したときだけ」入れる。      */
+let _weightAuto = false;    // 今の体重欄が「APIから自動で入ったもの」か
+let _weightKarte = '';      // 体重を表示している対象のカルテ番号
+
+function showSharedWeight(w){
+  const el = $('pweight'), b = $('wbadge'), s = $('wshare');
+  if(!el || !b) return;
+  if(!w){ b.textContent=''; b.className='wbadge'; if(s) s.classList.remove('on'); return; }
+  const d = w.days_ago;
+  if(w.stale){
+    // ★古い（既定60日超）＝入れずに、押せる形で見せるだけ
+    b.className = 'wbadge warn';
+    b.innerHTML = `<button type="button" class="wuse" onclick="useSharedWeight(${w.kg},${d})">`
+      + `⚠ 前回 ${w.kg}kg（${d}日前）— 押すと入ります</button>`;
+    if(s) s.classList.remove('on');
+    return;
+  }
+  if(!el.value || _weightAuto){                 // 手入力された値は上書きしない
+    el.value = w.kg; _weightAuto = true; persist(); render();
+  }
+  b.className = 'wbadge ok';
+  b.textContent = '院内で共有中' + (d === 0 ? '（本日）' : `（${d}日前）`);
+  if(s) s.classList.add('on');
+}
+
+function useSharedWeight(kg, days){
+  const el = $('pweight'); if(!el) return;
+  el.value = kg; _weightAuto = true; persist(); render();
+  const b = $('wbadge');
+  b.className = 'wbadge warn';
+  b.textContent = `${days}日前の体重です。測り直したら 💾 で更新してください`;
+}
+
+async function shareWeight(){
+  const kg = parseFloat(val('pweight'));
+  const k  = val('karte');
+  if(!isFinite(kg) || kg < 0.05 || kg > 120){ toast('体重を正しく入れてください（0.05〜120kg）'); return; }
+  if(!k){ toast('先にカルテ番号を入れてください'); return; }
+  if(typeof PatientInput === 'undefined' || !PatientInput.saveWeight){
+    toast('院内のネットワークでのみ共有できます'); return;   // Pages版(https)からは呼べない
+  }
+  const r = await PatientInput.saveWeight(k, kg, 'rx-app');
+  if(r){ _weightAuto = false; showSharedWeight(r); toast('体重を院内で共有しました'); }
+  else  toast('共有できませんでした（この処方箋はこのまま使えます）');
+}
 function updateRecallBtn(){
   const key=val('karte');
   const list = key ? (pickByKarte(historyGet(), key)||[]) : [];
@@ -1802,6 +1884,13 @@ renderBulkStart();
 refreshDatalist();
 updateRecallBtn();
 syncBoot();          // ラズパイ配信のときだけ、データをラズパイと合わせる
+
+// 体重の共有は院内（http）でしか使えない。使えない端末では 💾 を出さない
+// （押しても何も起きないボタンを見せない。GitHub Pages版＝https は混在コンテンツで
+//   院内APIを呼べないため、今までとまったく同じ見た目になる）
+if(typeof PatientInput === 'undefined' || !PatientInput.saveWeight){
+  const s = $('wshare'); if(s) s.style.display = 'none';
+}
 
 // 開くたびに最新版を確認し、古いキャッシュなら自動で最新へ（iPadが古いまま残らないように）
 (function(){
