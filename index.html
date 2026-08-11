@@ -186,7 +186,7 @@
   <div class="patient">
     <div class="fld" style="flex:0 0 150px;">
       <label class="lab">カルテ番号</label>
-      <input id="karte" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="123401 または 名前" oninput="onKarteInput()">
+      <input id="karte" placeholder="123401 または 名前">
     </div>
     <div class="fld">
       <label class="lab">患者名（任意）</label>
@@ -339,11 +339,11 @@
 
 <script src="libs/jspdf.umd.min.js"></script>
 <!-- 院内共通のカルテ番号入力部品。繋がらなくても手入力で使える -->
-<script src="patient-input.js?v=20260812" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
+<script src="patient-input.js?v=20260812b" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-12.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-12.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1884,6 +1884,16 @@ renderBulkStart();
 refreshDatalist();
 updateRecallBtn();
 syncBoot();          // ラズパイ配信のときだけ、データをラズパイと合わせる
+
+/* ★カルテ欄の入力は共通部品に任せる（2026-08-12）。
+   oninput="onKarteInput()" のままだと、日本語キーボードの変換中にも値を書き換えて
+   iPhone/iPadでカーソルが飛ぶ。共通部品が「確定した状態」でだけ呼んでくれる。
+   共通部品が無い端末（GitHub Pages版）では、今までどおり自前で拾う。 */
+if(typeof PatientInput !== 'undefined' && PatientInput.attachKarteInput){
+  PatientInput.attachKarteInput($('karte'), ()=>onKarteInput(), {nameToggle:true});
+}else{
+  $('karte').addEventListener('input', ()=>onKarteInput());
+}
 
 // 体重の共有は院内（http）でしか使えない。使えない端末では 💾 を出さない
 // （押しても何も起きないボタンを見せない。GitHub Pages版＝https は混在コンテンツで
