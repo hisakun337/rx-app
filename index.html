@@ -339,11 +339,11 @@
 
 <script src="libs/jspdf.umd.min.js"></script>
 <!-- 院内共通のカルテ番号入力部品。繋がらなくても手入力で使える -->
-<script src="patient-input.js?v=20260812b" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
+<script src="patient-input.js?v=20260812c" onerror="console.warn('患者情報APIに接続できません（手入力で使えます）')"></script>
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-12.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-12.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
