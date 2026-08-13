@@ -343,7 +343,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-12.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-08-13.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -468,10 +468,24 @@ function sharedPayload(){
 function mergeShared(st){
   if(!st) return;
   mergeImport(st);                                   // 覚えた薬・患者・プリセット（手入力を上書きしない）
-  if(typeof st.rx_history==='string'){               // 履歴は「まだ無いカルテ番号」だけ足す
+  if(typeof st.rx_history==='string'){
+    // ★2026-08-13修正: 以前は「まだ無いカルテ番号」だけ足していたため、
+    //   既にこの端末に履歴があるカルテ番号だと、相手の端末で後から追加された
+    //   新しい処方が永遠に反映されなかった（＝別端末で保存したのに古いまま見える不具合）。
+    //   → カルテ番号ごとに両方の記録を savedAt+内容 で突き合わせ、重複を除いて新しい順に統合する。
     try{
       const inc=JSON.parse(st.rx_history)||{}, cur=historyGet();
-      for(const k in inc){ if(!(k in cur)) cur[k]=inc[k]; }
+      const keys=new Set([...Object.keys(cur), ...Object.keys(inc)]);
+      keys.forEach(k=>{
+        const seen=new Set(), merged=[];
+        [...(cur[k]||[]), ...(inc[k]||[])].forEach(e=>{
+          const sig=(e.savedAt||'')+'|'+(e.lines||[]).join('|');
+          if(seen.has(sig)) return;
+          seen.add(sig); merged.push(e);
+        });
+        merged.sort((a,b)=> (b.savedAt||'').localeCompare(a.savedAt||''));
+        cur[k]=merged.slice(0,10);
+      });
       lsSet('rx_history', JSON.stringify(cur));
     }catch(_){}
   }
