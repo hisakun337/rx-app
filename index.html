@@ -107,6 +107,13 @@
     border-radius:12px;padding:12px;font-size:15px;font-weight:800;}
   .recall-btn:active{background:#d4efe0;}
   .drug-top{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
+  .pw{margin:4px 0 10px;}
+  .pw-row{display:flex;gap:6px;align-items:flex-start;margin-bottom:6px;}
+  .pw-nm{flex:1;position:relative;min-width:0;} .pw-nm input{width:100%;}
+  .pw-amt{width:70px;flex:none;text-align:right;} .pw-unit{flex:none;width:70px;}
+  .pw-del{flex:none;background:transparent;border:none;color:var(--muted);font-size:18px;padding:8px 6px;}
+  .pw-lac{display:flex;align-items:center;gap:10px;margin-top:8px;} .pw-lac .pw-lacamt{flex:1;max-width:220px;}
+  .pw-u{display:inline-flex;align-items:center;padding:0 10px;font-weight:800;}
   .mode-seg{display:flex;flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden;}
   .mbtn{flex:1;background:transparent;border:none;color:var(--muted);padding:9px 6px;font-size:13px;font-weight:700;}
   .mbtn.on{background:var(--accent);color:#fff;}
@@ -119,6 +126,26 @@
   .pick-list{max-height:56vh;overflow-y:auto;margin:10px 0;border:1px solid var(--line);border-radius:10px;}
   .pick-item{padding:14px 12px;font-size:16px;border-bottom:1px solid var(--line);}
   .pick-item:active{background:var(--accent);color:#fff;}
+  /* 薬剤名を打つと下に出る候補（2026-10-23） */
+  .namewrap{position:relative;}
+  .ac-list{display:none;position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:4px;background:#fff;
+    border:1px solid var(--accent);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-height:320px;overflow-y:auto;}
+  .ac-item{padding:13px 12px;font-size:16px;border-bottom:1px solid var(--line);}
+  .ac-item:last-child{border-bottom:none;}
+  .ac-item:active{background:var(--accent);color:#fff;}
+  .ac-item b{color:var(--accent);}
+  .ac-new{padding:9px 12px;font-size:12px;color:var(--muted);background:var(--card2);}
+  /* ★並べ替え：≡ を押さえて動かす。動かしている間は全カードを1行に縮める（長いカードを何枚も越えずに済む） */
+  .drug .grip{flex:0 0 auto;align-self:stretch;display:flex;align-items:center;padding:0 8px 0 2px;margin-left:-4px;
+    font-size:22px;color:var(--muted);touch-action:none;cursor:grab;-webkit-user-select:none;user-select:none;}
+  .drug .sumline{display:none;}
+  #drugs.reorder .drug{margin:6px 0;padding:10px 12px;}
+  #drugs.reorder .drug > *:not(.sumline){display:none !important;}
+  #drugs.reorder .drug .sumline{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;}
+  #drugs.reorder .drug .sumline small{font-weight:400;color:var(--muted);font-size:13px;}
+  #drugs.reorder .drug.moving{transition:transform .12s;}
+  #drugs.reorder .drug.dragging{position:relative;z-index:5;background:#eef4ff;border-color:var(--accent);
+    box-shadow:0 6px 18px rgba(0,0,0,.2);transition:none;}
   .dose-row{display:flex;gap:6px;}
   .dose-row .f-dose{flex:1;}
   .dose-row .f-unit{width:76px;padding:11px 6px;}
@@ -343,7 +370,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-08-13.3';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-11-12.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -550,6 +577,25 @@ async function syncBoot(){
     refreshDatalist(); updateRecallBtn();
   }catch(_){ serverOk = false; }   // ラズパイに繋がらなくても、端末の中だけで今まで通り動く
 }
+/** ★2026-08-29追加: 通信に一度でも失敗すると serverOk が false のままになり、
+    startPolling も「オフラインなら何もしない」で抜けていたため、**その端末は開き直すまで
+    二度とラズパイと同期しなかった**（覚えた薬が古いまま＝「前は覚えていたのに出てこない」）。
+    実際、NASが落ちていた影響で保存が20秒かかり、iPadの通信が失敗する状況が起きていた。
+    → 1分ごとに復帰を試す。
+    ★復帰時だけは pullFromServer（サーバーで丸ごと置き換え）ではなく mergeShared（足し算）
+      を使う。繋がらない間にこの端末で覚えた薬を、復帰の瞬間に消さないため。
+      取り込んでから syncPush でこの端末の分も預ける。 */
+async function syncReconnect(){
+  try{
+    const r = await fetch('api/state', {cache:'no-store'});
+    if(!r.ok) throw new Error('GET '+r.status);
+    const j = await r.json();
+    serverOk = true; srev = j.rev || 0;
+    mergeShared(j.state);                     // 相手の分を取り込む（この端末の分は消さない）
+    refreshDatalist(); updateRecallBtn();
+    await syncPush();                         // この端末の分を預ける
+  }catch(_){ serverOk = false; }              // まだ繋がらない。次の1分後にまた試す
+}
 /** ★2026-08-13追加: 開きっぱなしのタブは今まで「起動時」と「自分が編集した時」しか
     通信しなかったため、他の端末の変更（追加も削除も）に気づけなかった（実機で確認）。
     60秒ごとに軽く様子を見に行き、サーバー側のリビジョンが変わっていた時だけ
@@ -557,7 +603,8 @@ async function syncBoot(){
 function startPolling(){
   if(!SERVER_MODE) return;
   setInterval(async ()=>{
-    if(!serverOk || _syncing) return;         // オフライン中・自分が送信中は次回に譲る
+    if(_syncing) return;                      // 自分が送信中は次回に譲る
+    if(!serverOk){ await syncReconnect(); return; }   // ★オフラインだった端末も復帰を試す
     try{
       const r = await fetch('api/state', {cache:'no-store'});
       if(!r.ok) return;
@@ -581,14 +628,27 @@ function persistPresets(){ lsSet('rx_presets', JSON.stringify(presets)); }
 function persistSettings(){ lsSet('rx_settings', JSON.stringify(settings)); }
 function persistLearned(){ lsSet('rx_learned', JSON.stringify(learned)); }
 
-/** コピー/送信した処方の薬剤名を自動で候補に覚える（{name,mg}・新しいものを先頭へ・最大300件） */
+/** コピー/送信した処方の薬剤名を自動で候補に覚える（{name,mg}・新しいものを先頭へ）
+ *  ★2026-08-29 修正（院長の「タムスロシンとか前は覚えてたのに、今覚えてない」）★
+ *    上限が300件しかなく、新しい薬を1つ覚えるたびに `slice(0,300)` で
+ *    **末尾＝いちばん古くから覚えていた薬**が切り捨てられていた。
+ *    実際、2026-08-22の朝に502件あったものが、その直後に300件へ落ち、
+ *    ノミダニ予防薬一式など209件がまとめて消えていた（ラズパイの控えで確認）。
+ *    しかも消えた状態がサーバーへ送られ、全端末に広がっていた。
+ *    → 上限を2000件へ。薬剤名は1件あたり数十バイトなので容量の心配はない
+ *      （2000件でも100KB程度。いま509件）。
+ *    ★不要な薬は⚙︎設定の「覚えた薬剤名」から手で消せる（勝手に消さないのが正しい）。 */
+const LEARNED_MAX = 2000;
 function learnNames(){
   let changed=false;
   rows.forEach(r=>{
-    const n=(r.name||'').trim();
-    if(n && !learned.some(l=>l.name===n)){ learned.unshift({name:n, mg:''}); changed=true; }
+    const names = r.mode==='powder' ? (r.parts||[]).map(x=>(x.name||'').trim()) : [(r.name||'').trim()];
+    names.forEach(n=>{ if(n && !learned.some(l=>l.name===n)){ learned.unshift({name:n, mg:''}); changed=true; } });
   });
-  if(changed){ learned=learned.slice(0,300); persistLearned(); refreshDatalist(); }
+  if(changed){
+    if(learned.length > LEARNED_MAX) learned=learned.slice(0,LEARNED_MAX);
+    persistLearned(); refreshDatalist();
+  }
 }
 /** 薬剤名から1錠あたりの規格mgを引く（手動プリセット→覚えた薬の順） */
 function drugMg(name){
@@ -635,6 +695,7 @@ function saveHistory(){
     savedAt:new Date().toISOString(), pname:val('pname'), date:val('pdate'),
     rows: rows.map(r=>{
       const o={mode:r.mode||'calc',name:r.name,dose:r.dose,unit:r.unit||'T',freq:r.freq,freqKey:r.freqKey,freqEvery:r.freqEvery||1,days:r.days,qty:r.qty,funit:r.funit,usage:r.usage,note:r.note||'',rxChecked:r.rxChecked!==false};
+      if(r.mode==='powder'){ o.parts=(r.parts||[]).map(x=>({name:x.name||'',amt:x.amt||'',unit:x.unit||'T'})); o.lactose=r.lactose!==false; o.lactoseAmt=r.lactoseAmt||''; }
       // ★開始タイミングは「選ばれている時だけ」書く。空欄を勝手に埋めると
       //   「記録が無い」のか「本日朝からだった」のか後から区別できなくなる
       if(STARTS.find(x=>x.key===r.startKey)) o.startKey=r.startKey;
@@ -837,7 +898,17 @@ async function shareWeight(){
   if(typeof PatientInput === 'undefined' || !PatientInput.saveWeight){
     toast('院内のネットワークでのみ共有できます'); return;   // Pages版(https)からは呼べない
   }
-  const r = await PatientInput.saveWeight(k, kg, 'rx-app');
+  // ★2026-08-29追加: 保存中は💾を押せなくして「今やっています」を見せる。
+  //   以前は押しても画面が何も変わらず、遅い時に「効いていない」と見えていた。
+  const btn = $('wshare'), label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }   // ボタン幅が変わらないよう絵文字1つで
+  let r = null;
+  try{ r = await PatientInput.saveWeight(k, kg, 'rx-app'); }
+  finally{ if(btn){ btn.disabled = false; btn.textContent = label; } }
+  // ★保存の途中で始まっていた患者照会の結果は捨てる。
+  //   さもないと「保存前の古い体重」で表示を上書きしてしまい、
+  //   共有できているのに「院内で共有中」が出ない／古い日付が出る（院長の報告そのもの）。
+  _lookupSeq++;
   if(r){ _weightAuto = false; showSharedWeight(r); toast('体重を院内で共有しました'); }
   else  toast('共有できませんでした（この処方箋はこのまま使えます）');
 }
@@ -912,20 +983,20 @@ function openDrugPick(r, nameEl, el){
 function renderPickList(query){
   const box=$('drugPickList');
   const all=allDrugNames();
-  const q=(query||'').trim().toLowerCase();
-  const list=(q ? all.filter(n=>n.toLowerCase().includes(q)) : all).slice(0,400);
+  const q=(query||'').trim();
+  const list=(q ? matchDrugs(q, 400) : all.slice(0,400));
   if(!list.length){ box.innerHTML='<p class="hint">該当する薬剤がありません。手入力してください。</p>'; return; }
   box.innerHTML=list.map(n=>`<div class="pick-item">${esc(n)}</div>`).join('');
   [...box.querySelectorAll('.pick-item')].forEach((it,i)=> it.addEventListener('click',()=>{
     const name=list[i], t=_pickTarget; if(!t) return;
-    t.nameEl.value=name; t.r.name=name;
-    if(t.r.mode!=='fixed') autofillMg(t.r, t.el);
-    const nt=drugNote(name), nEl=t.el.querySelector('.f-note'); if(nEl){ nEl.value=nt; t.r.note=nt; }
-    updateOut(t.r, t.el); persist(); renderPreview();
-    closeDrugPick();
+    // ★検索欄が変換中のまま閉じると、iPadで変換候補のウインドウが残る → 先に変換を終わらせてから閉じる
+    settleIme(()=>{ applyDrugName(t.r, t.nameEl, t.el, name); closeDrugPick(); });
   }));
 }
-function closeDrugPick(){ $('drugpick').classList.remove('open'); }
+function closeDrugPick(){
+  const a=document.activeElement; if(a && a.id==='drugSearch') a.blur();
+  $('drugpick').classList.remove('open');
+}
 function loadHistoryEntry(i){
   // ★一覧(openRecall)と同じ引き方に揃える。生のキーで引くと
   //   カルテ番号の書き方が違う時に「一覧には出るのに読み込むと空」になっていた
@@ -938,7 +1009,8 @@ function loadHistoryEntry(i){
     freqKey:r.freqKey||'SID', freqEvery:r.freqEvery||1, days:r.days||'', qty:r.qty||'', funit:r.funit||'個', usage:r.usage||'', note:r.note||'',
     // ★古い履歴には開始タイミングが無い。既定値で埋めず、選び直してもらう（未選択のまま出す）
     startKey: (STARTS.find(x=>x.key===r.startKey) ? r.startKey : ''),
-    rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'' }));
+    rxChecked:r.rxChecked!==false, doseOpen:false, w:'', mgkg:'',
+    ...(r.mode==='powder' ? {parts:(r.parts||[]).map(x=>({...x})), lactose:r.lactose!==false, lactoseAmt:r.lactoseAmt||''} : {}) }));
   if(!rows.length) rows=[blankRow()];
   render(); persist(); closeRecall();
   toast('前回処方を読み込みました');
@@ -1073,7 +1145,21 @@ function _lineParts(r, withStart){
   const E = s => esc(String(s));
   const GAP = '　';   // プレーン用：薬剤名と数量の間の全角スペース
   let text, left, right='';
-  if(r.mode==='fixed'){
+  if(r.mode==='powder'){
+    // 粉薬：混ぜる薬（＋乳糖）を1包にして、1回◯包 頻度 → 合計◯包/◯日
+    const parts=powderParts(r);
+    if(!parts.length) return null;
+    const dose=parseAmount((r.dose||'1').trim()) || parseAmount('1');
+    const days=parseInt(r.days,10);
+    const head=`${doseDisp(dose,'包')}包 ${r.freqKey}`;
+    left = `${E(head)} 散剤<br>${parts.map(x=>'　'+E(x)).join('<br>')}`;
+    text = `${head} 散剤［${parts.join('・')}］`;
+    if(days>0){
+      const c=calcRow(Object.assign({}, r, {dose:r.dose||'1'}));
+      const total=`${fmtNum(c.total.toNumber())}包/${days}days`;
+      right=E(total); text+=`${GAP}${total}`;
+    }
+  } else if(r.mode==='fixed'){
     const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
     if(!qty && !usage) return null;                 // 数量も用法も無ければ出さない
     const nm = usage ? `${name}（${usage}）` : name;
@@ -1137,10 +1223,48 @@ function render(){
   renderPreview();
 }
 
+/* ── 粉薬（2026-11-11 院長）── 例：プロナミド 9T＋フラジール 4T＋乳糖 → 1包 BID 14包/7days */
+function powderParts(r){
+  const out=(r.parts||[]).filter(x=>(x.name||'').trim()).map(x=>`${x.name.trim()}${(x.amt||'').toString().trim() ? ' '+x.amt.toString().trim()+(x.unit||'T') : ''}`);
+  if(out.length && r.lactose!==false) out.push('乳糖' + ((r.lactoseAmt||'').toString().trim() ? ' '+r.lactoseAmt.toString().trim()+'g' : ''));
+  return out;
+}
+function powderName(r){ return powderParts(r).join('＋'); }
+function bindPowder(r, el){
+  const q=s=>el.querySelector(s);
+  const changed=()=>{ r.name=powderName(r); updateOut(r,el); persist(); renderPreview();
+    const sl=el.querySelector('.sumline span:nth-child(2)'); if(sl) sl.textContent=(rows.indexOf(r)+1)+'. '+(r.name||'（粉薬）'); };
+  el.querySelectorAll('.pw-row').forEach(row=>{
+    const i=+row.dataset.i, x=r.parts[i];
+    const nm=row.querySelector('.pw-name');
+    nm.addEventListener('input', ()=>{ x.name=nm.value; changed(); });
+    attachAutocomplete(nm, row.querySelector('.pw-ac'), name=>{ nm.value=name; x.name=name; changed(); });
+    row.querySelector('.pw-amt').addEventListener('input', e=>{ x.amt=e.target.value; changed(); });
+    row.querySelector('.pw-unit').addEventListener('change', e=>{ x.unit=e.target.value; changed(); });
+    row.querySelector('.pw-del').addEventListener('click', ()=>{ r.parts.splice(i,1); if(!r.parts.length) r.parts.push({name:'',amt:'',unit:'T'}); r.name=powderName(r); render(); persist(); });
+  });
+  q('.pw-add').addEventListener('click', ()=>{ r.parts.push({name:'',amt:'',unit:'T'}); render(); persist();
+    const rs=$('drugs').querySelector(`.drug[data-id="${r.id}"]`)?.querySelectorAll('.pw-name'); rs&&rs[rs.length-1].focus(); });
+  q('.pw-lacchk').addEventListener('change', e=>{ r.lactose=e.target.checked; changed(); });
+  q('.pw-lacamt').addEventListener('input', e=>{ r.lactoseAmt=e.target.value; changed(); });
+  const doseEl=q('.f-dose'), daysEl=q('.f-days');
+  doseEl.addEventListener('input', ()=>{ r.dose=doseEl.value; changed(); });
+  daysEl.addEventListener('input', ()=>{ r.days=daysEl.value; changed(); });
+  q('.f-dosechips').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{ r.dose=c.dataset.v; doseEl.value=c.dataset.v; changed(); }));
+  el.querySelectorAll('.f-daychip').forEach(c=>c.addEventListener('click',()=>{ r.days=c.dataset.v; daysEl.value=c.dataset.v; changed(); }));
+  q('.f-freq').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+    r.freq=+c.dataset.n; r.freqKey=c.dataset.k; r.freqEvery=+c.dataset.e;
+    q('.f-freq').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c)); changed(); }));
+  q('.f-start').querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{
+    r.startKey=c.dataset.k; const cur=STARTS.find(x=>x.key===r.startKey)?r.startKey:'';
+    q('.f-start').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x.dataset.k===cur)); changed(); }));
+}
+
 function drugEl(r, idx=0, total=1){
   const el = document.createElement('div');
   el.className='drug'; el.dataset.id=r.id;
-  const calc = r.mode!=='fixed';
+  const mode = r.mode==='fixed' ? 'fixed' : r.mode==='powder' ? 'powder' : 'calc';
+  const calc = mode==='calc', powder = mode==='powder';
 
   const calcFields = `
     <div class="grid">
@@ -1187,6 +1311,34 @@ function drugEl(r, idx=0, total=1){
     <div style="margin-top:10px;"><label class="lab">用法・メモ（任意）</label>
       <input class="f-usage" value="${esc(r.usage)}" placeholder="例 両眼5-6回/日、月1回"></div>`;
 
+  // 粉薬：中身（薬・量・単位）を何行でも＋乳糖（かさまし・料金なし）→ 1回◯包・頻度・日数
+  const powderFields = !powder ? '' : `
+    <div class="pw">
+      <label class="lab">混ぜる薬（1包の中身ではなく、全部で使う量）</label>
+      ${(r.parts||[]).map((x,i)=>`<div class="pw-row" data-i="${i}">
+        <div class="pw-nm"><input class="pw-name" value="${esc(x.name)}" placeholder="薬剤名" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><div class="ac-list pw-ac"></div></div>
+        <input class="pw-amt" inputmode="decimal" value="${esc(x.amt)}" placeholder="量">
+        <select class="pw-unit">${['T','g','mg','Cap','ml','包'].map(u=>`<option ${(x.unit||'T')===u?'selected':''}>${u}</option>`).join('')}</select>
+        <button class="pw-del" title="この薬を外す">✕</button></div>`).join('')}
+      <button class="smallbtn pw-add">＋ 薬を足す</button>
+      <div class="pw-lac"><label class="rxchk"><input type="checkbox" class="pw-lacchk" ${r.lactose!==false?'checked':''}>乳糖（かさまし）</label>
+        <input class="pw-lacamt" inputmode="decimal" value="${esc(r.lactoseAmt||'')}" placeholder="g（空欄なら量は書かない）"></div>
+    </div>`;
+  const powderTiming = !powder ? '' : `
+    <div class="grid">
+      <div><label class="lab">1回</label><div class="dose-row"><input class="f-dose" value="${esc(r.dose||'1')}" inputmode="decimal"><span class="pw-u">包</span></div>
+        <div class="chips f-dosechips">${['1/2','1','2'].map(v=>`<button class="chip" data-v="${v}">${v}</button>`).join('')}</div></div>
+      <div><label class="lab">頻度</label><div class="chips freq f-freq">
+        ${FREQS.map(f=>`<button class="chip ${r.freqKey===f.key?'on':''}" data-k="${f.key}" data-n="${f.n}" data-e="${f.everyDays}">${f.key}<br><span style="font-size:11px;font-weight:600;opacity:.8">${f.jp}</span></button>`).join('')}</div></div>
+      <div><label class="lab">日数</label><input class="f-days" inputmode="numeric" value="${esc(r.days)}" placeholder="例 7">
+        <div class="chips">${['5','7','10','14','20','30'].map(v=>`<button class="chip f-daychip" data-v="${v}">${v}</button>`).join('')}</div></div>
+    </div>
+    <div style="margin-top:10px;"><label class="lab">いつから飲み始めるか</label>
+      <div class="chips start f-start">
+        <button class="chip ${!STARTS.find(x=>x.key===r.startKey)?'on':''} chip-none" data-k="">指定なし</button>
+        ${STARTS.map(s=>`<button class="chip ${r.startKey===s.key?'on':''}" data-k="${s.key}">${s.jp}</button>`).join('')}
+      </div></div>`;
+
   const helpBlock = `
     <div class="dosehelp ${r.doseOpen?'open':''}">
       <div class="g3">
@@ -1198,25 +1350,30 @@ function drugEl(r, idx=0, total=1){
     </div>`;
 
   el.innerHTML = `
+    <div class="sumline"><span class="grip">≡</span><span>${idx+1}. ${esc(r.name||'（薬剤名なし）')}</span><small class="f-sum"></small></div>
     <div class="drug-top">
+      <span class="grip" title="押さえたまま上下に動かして並べ替え">≡</span>
       <div class="mode-seg">
         <button class="mbtn ${calc?'on':''}" data-m="calc">錠剤・液剤（計算）</button>
-        <button class="mbtn ${!calc?'on':''}" data-m="fixed">定量・外用</button>
+        <button class="mbtn ${powder?'on':''}" data-m="powder">粉薬</button>
+        <button class="mbtn ${mode==='fixed'?'on':''}" data-m="fixed">定量・外用</button>
       </div>
       <label class="rxchk"><input type="checkbox" class="f-rxchk" ${r.rxChecked!==false?'checked':''}>処方箋</label>
       <button class="mv f-up" title="上へ移動" ${idx===0?'disabled':''}>▲</button>
       <button class="mv f-down" title="下へ移動" ${idx>=total-1?'disabled':''}>▼</button>
       <button class="del" title="削除">✕</button>
     </div>
-    <div class="namewrap">
+    ${powder ? powderFields : ''}
+    <div class="namewrap" ${powder?'style="display:none"':''}>
       <label class="lab">薬剤名</label>
       <div class="name-row">
-        <input class="f-name" value="${esc(r.name)}" placeholder="手入力 or 「一覧」から選択" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <input class="f-name" value="${esc(r.name)}" placeholder="薬剤名を入力（候補が下に出ます）" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         <button class="name-clear f-clear" title="名前を消す">×</button>
         <button class="name-pick f-pick" title="一覧から選ぶ">☰ 一覧</button>
       </div>
+      <div class="ac-list f-ac"></div>
     </div>
-    ${calc ? calcFields : fixedFields}
+    ${calc ? calcFields : powder ? powderTiming : fixedFields}
     <div class="calcline">
       <span class="out f-out">—</span>
       ${calc ? '<button class="minibtn f-toggle">⚖️ 用量計算</button>' : ''}
@@ -1231,8 +1388,15 @@ function drugEl(r, idx=0, total=1){
 
   // モード切替
   el.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',()=>{
-    const m=b.dataset.m; if((m==='fixed')===(r.mode==='fixed')) return;
-    r.mode=m; render(); persist(); renderPreview();
+    const m=b.dataset.m; if(m===mode) return;
+    r.mode=m;
+    if(m==='powder'){                                   // 粉薬にしたら、入っていた薬を1つ目の中身に
+      if(!r.parts || !r.parts.length) r.parts=[{name:r.name||'', amt:'', unit:'T'}];
+      if(r.lactose===undefined) r.lactose=true;
+      if(!parseAmount(r.dose||'')) r.dose='1';
+      r.name=powderName(r);
+    } else if(mode==='powder'){ r.name=(r.parts&&r.parts[0]&&r.parts[0].name)||''; }
+    render(); persist(); renderPreview();
   }));
 
   // 薬剤名（手入力／一覧から選択／消去）
@@ -1241,13 +1405,16 @@ function drugEl(r, idx=0, total=1){
   nameEl.addEventListener('input', onName);
   q('.f-clear').addEventListener('click', ()=>{ nameEl.value=''; r.name=''; const nE=q('.f-note'); if(nE) nE.value=''; r.note=''; updateOut(r,el); persist(); renderPreview(); nameEl.focus(); });
   q('.f-pick').addEventListener('click', ()=> openDrugPick(r, nameEl, el));
+  // ★打った文字で覚えた薬・プリセットから候補を出す。無ければ打ったまま（コピー時に覚える）
+  attachAutocomplete(nameEl, q('.f-ac'), name=> applyDrugName(r, nameEl, el, name));
   q('.f-note').addEventListener('input', e=>{ r.note=e.target.value; setDrugNote(r.name, e.target.value); persist(); });
   q('.f-rxchk').addEventListener('change', e=>{ r.rxChecked=e.target.checked; persist(); });
   el.querySelector('.del').addEventListener('click', ()=>removeRow(r.id));
   q('.f-up').addEventListener('click', ()=>moveRow(r.id,-1));
   q('.f-down').addEventListener('click', ()=>moveRow(r.id,1));
 
-  if(calc){
+  if(powder) bindPowder(r, el);
+  else if(calc){
     const doseEl=q('.f-dose'), daysEl=q('.f-days'), unitEl=q('.f-unit');
     doseEl.addEventListener('input', ()=>{ r.dose=doseEl.value; updateOut(r,el); persist(); renderPreview(); });
     daysEl.addEventListener('input', ()=>{ r.days=daysEl.value; updateOut(r,el); persist(); renderPreview(); });
@@ -1305,7 +1472,7 @@ function autofillMg(r,el){
 
 /** 体重(共通)と規格mgが分かれば、1回量から mg/kg を出す確認文（カルテには入れない） */
 function verifyMgkg(r){
-  if(r.mode==='fixed') return '';
+  if(r.mode==='fixed' || r.mode==='powder') return '';
   const dose=parseAmount(r.dose); if(!dose) return '';
   const W=parseFloat(val('pweight')), MG=drugMg(r.name);
   if(!(W>0) || !(MG>0)) return '';
@@ -1314,6 +1481,14 @@ function verifyMgkg(r){
 }
 function updateOut(r,el){
   const out=el.querySelector('.f-out'); if(!out) return;
+  if(r.mode==='powder'){
+    const parts=powderParts(r), days=parseInt(r.days,10);
+    if(!parts.length){ out.innerHTML='<span style="color:var(--muted)">混ぜる薬と量を入力</span>'; return; }
+    const c=days>0 ? calcRow(Object.assign({}, r, {dose:r.dose||'1'})) : null;
+    out.innerHTML = c ? `<b style="color:var(--text)">合計 ${fmtNum(c.total.toNumber())}包</b> <span style="color:var(--muted)">= ${esc(r.dose||'1')}包 × ${r.freqEvery>1 ? c.doses+'回（'+r.freqEvery+'日に1回）' : r.freq+'回/日 × '+c.days+'日'}　［${esc(parts.join('・'))}］</span>`
+                      : `<span style="color:var(--muted)">出力：</span> ${esc(lineFor(r)||'')}`;
+    return;
+  }
   if(r.mode==='fixed'){
     const line=lineFor(r);
     out.innerHTML = line ? `<span style="color:var(--muted)">出力：</span> ${esc(line)}`
@@ -1415,10 +1590,29 @@ function renderPreview(){
   refreshDatalist();
 }
 /** 手動プリセット名＋覚えた薬名を重複なく集め、五十音順で返す */
+/* ★価格表の品目も候補に出す（2026-11-12 院長）：内服・外用・サプリ・ノミダニ・フィラリア・フード・エリザベスウェアなど。
+   電子カルテ(:8998)が価格表から処方・販売するものの名前だけ返す。端末に1日とっておく（つながらない時も前回分で出る）。
+   ★覚えた薬・プリセットとは別に持つ＝⚙︎設定の「覚えた薬剤名」には混ぜない・同期もしない */
+let priceNames=[];
+try{ const c=JSON.parse(localStorage.getItem('rx_price_names')||'null'); if(c && Array.isArray(c.names)) priceNames=c.names; }catch(_){}
+(function loadPriceNames(){
+  try{
+    const c=JSON.parse(localStorage.getItem('rx_price_names')||'null');
+    if(c && c.at && Date.now()-c.at < 86400000 && (c.names||[]).length) return;
+  }catch(_){}
+  const host=location.hostname || 'cti-pi.local';
+  fetch(`http://${host}:8998/suwa/pages/price-rx`, {cache:'no-store'}).then(r=>r.json()).then(d=>{
+    if(!d || !Array.isArray(d.names) || !d.names.length) return;
+    priceNames=d.names;
+    try{ localStorage.setItem('rx_price_names', JSON.stringify({at:Date.now(), names:d.names})); }catch(_){}
+    try{ refreshDatalist(); }catch(_){}
+  }).catch(()=>{});
+})();
 function allDrugNames(){
   const names=[], seen=new Set();
   presets.forEach(p=>{ const n=(p.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
   learned.forEach(l=>{ const n=(l.name||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
+  priceNames.forEach(n0=>{ const n=(n0||'').trim(); if(n && !seen.has(n)){ seen.add(n); names.push(n); } });
   names.sort((a,b)=>a.localeCompare(b,'ja'));
   return names;
 }
@@ -1427,25 +1621,56 @@ function refreshDatalist(){
   if(!dl){ dl=document.createElement('datalist'); dl.id='preset-dl'; document.body.appendChild(dl); }
   dl.innerHTML = allDrugNames().map(n=>`<option value="${esc(n)}">`).join('');
 }
-/** 薬剤名の自作サジェスト（文字入力を邪魔しない・下にタップ候補を出す） */
-function attachAutocomplete(input, list, onChange){
+/** 検索用の正規化：ひらがな/カタカナ・全角/半角・大文字/小文字・空白や記号の違いを無視する
+ *  （変換前のひらがな「ぷれど」でも「プレドニゾロン」が出る） */
+function normName(t){
+  return String(t==null?'':t).normalize('NFKC').toLowerCase()
+    .replace(/[ぁ-ゖ]/g, c=>String.fromCharCode(c.charCodeAt(0)+0x60))
+    .replace(/[\s、。,.・()\[\]「」{}\-‐－―ー_/:;'"]/g,'');
+}
+function matchDrugs(query, limit){
+  const q=normName(query); if(!q) return [];
+  const all=allDrugNames().map(n=>({n, k:normName(n)}));
+  const head=all.filter(x=>x.k.startsWith(q)), mid=all.filter(x=>!x.k.startsWith(q) && x.k.includes(q));
+  return head.concat(mid).slice(0, limit||400).map(x=>x.n);
+}
+/** ★iPadの日本語入力対策：変換中（候補ウインドウが出ている）のまま名前を差し替えると、
+ *  あとから変換の確定が割り込んで文字が戻ったり、候補ウインドウが画面に残ったりする。
+ *  先に入力欄から抜けて変換を確定・終了させ、そのあとで名前を入れる。 */
+function settleIme(then){
+  const a=document.activeElement;
+  if(a && a!==document.body && typeof a.blur==='function') a.blur();
+  setTimeout(then, 60);
+}
+/** 薬剤名を決めた時の共通処理（一覧からでも候補からでも同じ） */
+function applyDrugName(r, nameEl, el, name){
+  nameEl.value=name; r.name=name;
+  if(r.mode!=='fixed') autofillMg(r, el);
+  const nt=drugNote(name), nEl=el.querySelector('.f-note'); if(nEl){ nEl.value=nt; r.note=nt; }
+  updateOut(r, el); persist(); renderPreview();
+}
+/** 薬剤名の候補（文字入力を邪魔しない・下にタップ候補を出す） */
+function attachAutocomplete(input, list, onPick){
+  let busy=false;
   const hide=()=>{ list.style.display='none'; list.innerHTML=''; };
   const show=()=>{
+    if(busy) return;
     const v=(input.value||'').trim(); if(!v){ hide(); return; }
-    const lc=v.toLowerCase(), all=allDrugNames();
-    let m=all.filter(n=>n.toLowerCase().startsWith(lc));
-    if(m.length<6) m=m.concat(all.filter(n=>!m.includes(n)&&n.toLowerCase().includes(lc)));
-    m=m.slice(0,6);
-    if(!m.length || (m.length===1 && m[0]===v)){ hide(); return; }
+    const m=matchDrugs(v, 30);
+    if(!m.length){ list.innerHTML='<div class="ac-new">一覧にない薬です。このまま使えます（コピー・送信すると覚えます）</div>'; list.style.display='block'; return; }
+    if(m.length===1 && m[0]===v){ hide(); return; }
     list.innerHTML=m.map(n=>`<div class="ac-item">${esc(n)}</div>`).join('');
-    [...list.children].forEach((it,i)=> it.addEventListener('pointerdown',ev=>{
-      ev.preventDefault(); input.value=m[i]; hide(); onChange();
+    [...list.children].forEach((it,i)=> it.addEventListener('pointerdown', ev=>{
+      ev.preventDefault();
+      const name=m[i]; busy=true; hide();
+      settleIme(()=>{ onPick(name); busy=false; });
     }));
     list.style.display='block';
   };
-  input.addEventListener('input', ()=>{ onChange(); show(); });
+  input.addEventListener('input', show);
+  input.addEventListener('compositionupdate', ()=> setTimeout(show, 0));
   input.addEventListener('focus', show);
-  input.addEventListener('blur', ()=> setTimeout(hide,150));
+  input.addEventListener('blur', ()=> setTimeout(hide, 150));
 }
 
 function copyOut(){
@@ -1453,6 +1678,17 @@ function copyOut(){
   if(!lines.length && !manualNoteVal()){ toast('計算できる薬剤がありません'); return; }
   if(lines.length){ saveHistory(); learnNames(); }
   copyRich();
+  notifyKarte();
+}
+/* ★電子カルテの中（iframe）で開いている時は、コピー/まとめて実行した処方をカルテへ渡す（2026-11-11）
+   カルテ側がそのページに入れて、この画面を閉じる。単独で開いている時は何もしない */
+function notifyKarte(){
+  try{
+    if(window.parent === window) return;
+    const lines=drugLines().concat((manualNoteVal()||'').split(/\n/).map(x=>x.trim()).filter(Boolean));
+    if(!lines.length) return;
+    window.parent.postMessage({type:'suwa-rx-done', karte:val('karte'), entry:{at:new Date().toISOString(), date:val('pdate'), lines}}, '*');
+  }catch(_){}
 }
 function copyText(t){
   if(CLIP_OK){
@@ -1550,6 +1786,14 @@ function getClinic(){
 function rxJp(r){
   const name=(r.name||'').trim();
   const note=(r.note||'').trim();
+  if(r.mode==='powder'){
+    const f=FREQS.find(x=>x.key===r.freqKey); const freqJp=f?f.jp:(r.freqKey||'');
+    const days=parseInt(r.days,10), dose=parseAmount((r.dose||'1').trim()) || parseAmount('1');
+    let usage=`${doseDisp(dose,'包')}包　${freqJp}`; if(days>0) usage+=`　${days}日分`;
+    const st=startJp(r.startKey); if(st) usage+=`　${st}`;
+    const c=calcRow(Object.assign({}, r, {dose:r.dose||'1'}));
+    return { name:`散剤（${powderParts(r).join('・')}）`, usage, total: c&&days>0 ? `合計 ${fmtNum(c.total.toNumber())}包` : '', note };
+  }
   if(r.mode==='fixed'){
     const qty=(r.qty??'').toString().trim(), unit=(r.funit||'').trim(), usage=(r.usage||'').trim();
     return { name, usage:`${qty}${unit}${usage?'（'+usage+'）':''}`.trim(), total:'', note };
@@ -1664,9 +1908,11 @@ async function doAllInOne(){
   copyRich();
   // 2) Slack（送れる時のみ）
   if(slackReady()){
-    try{ postSlack(buildSlackText()).catch(()=>{}); }catch(_){}
+    // ★カルテの中で開いている時は、送り終わる前に画面を閉じられないよう待つ（最大4秒）
+    try{ await Promise.race([postSlack(buildSlackText()).catch(()=>{}), new Promise(r=>setTimeout(r,4000))]); }catch(_){}
   }
   toast(slackReady()?'コピー＋Slack完了':'コピー完了（Slack未設定）');
+  notifyKarte();
 }
 async function generatePrescription(){
   const drugs=rows.filter(r=> r.rxChecked!==false && (r.name||'').trim());
@@ -1730,6 +1976,71 @@ function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
   // 追加した薬剤名にフォーカス
   const last=$('drugs').lastElementChild?.querySelector('.f-name'); last&&last.focus();
 }
+/* ── 薬剤の並べ替え：≡ を押さえたまま上下に動かす（2026-10-23・カルテ貼り付けアプリと同じ操作） ──
+   押さえた瞬間に全カードを1行に縮め、指の下に掴んだカードが来るよう画面を合わせる。離すと元の大きさに戻る。 */
+let drag=null, dragJust=false;
+document.addEventListener('pointerdown', e=>{
+  const g=e.target.closest && e.target.closest('#drugs .grip'); if(!g) return;
+  e.preventDefault();
+  settleIme(()=>{});                       // 入力中なら抜けてキーボードを閉じる
+  const box=$('drugs'), card=g.closest('.drug');
+  const from=[...box.children].indexOf(card); if(from<0) return;
+  box.querySelectorAll('.drug').forEach((c,i)=>{ const o=c.querySelector('.f-out'), s=c.querySelector('.f-sum'); if(s) s.textContent=o? o.textContent:''; });
+  box.classList.add('reorder');
+  const els=[...box.children];
+  // 縮めた後の掴んだカードを指の位置へ
+  const rc=card.getBoundingClientRect();
+  window.scrollBy(0, rc.top + rc.height/2 - e.clientY);
+  // 画面の端でスクロールしきれない時は、掴んだカードを指の下まで持ってくる（off）
+  const rc2=card.getBoundingClientRect(), off=e.clientY-(rc2.top+rc2.height/2);
+  drag={from, to:from, card, els, box, y0:e.clientY+window.scrollY, off, h:card.offsetHeight+12,
+        mids:els.map(c=>{ const b=c.getBoundingClientRect(); return b.top+window.scrollY+b.height/2; }),
+        lastY:e.clientY, timer:null};
+  try{ g.setPointerCapture(e.pointerId); }catch(_){}
+  els.forEach(c=>{ if(c!==card) c.classList.add('moving'); });
+  card.classList.add('dragging');
+  dragMove(e.clientY);
+  drag.timer=setInterval(()=>{
+    if(!drag) return;
+    const v = drag.lastY < 70 ? -10 : drag.lastY > window.innerHeight-70 ? 10 : 0;
+    if(v){ window.scrollBy(0, v); dragMove(drag.lastY); }
+  }, 30);
+}, {passive:false});
+function dragMove(clientY){
+  const d=drag; if(!d) return;
+  d.lastY=clientY;
+  const dy=clientY+window.scrollY-d.y0+d.off;
+  d.card.style.transform=`translateY(${dy}px)`;
+  const c=d.mids[d.from]+dy;
+  let to=0; d.mids.forEach((m,i)=>{ if(i!==d.from && m<c) to++; });
+  d.to=to;
+  d.els.forEach((el,i)=>{
+    if(i===d.from) return;
+    let sh=0;
+    if(d.from<to && i>d.from && i<=to) sh=-d.h;
+    if(to<d.from && i>=to && i<d.from) sh=d.h;
+    el.style.transform = sh ? `translateY(${sh}px)` : '';
+  });
+}
+document.addEventListener('pointermove', e=>{ if(drag){ e.preventDefault(); dragMove(e.clientY); } }, {passive:false});
+function dragEnd(){
+  const d=drag; if(!d) return;
+  drag=null; clearInterval(d.timer);
+  dragJust=true; setTimeout(()=>dragJust=false, 300);
+  d.box.classList.remove('reorder');
+  const id=rows[d.from] && rows[d.from].id;
+  if(d.to!==d.from){
+    const [m]=rows.splice(d.from,1); rows.splice(d.to,0,m);
+    render(); persist(); renderPreview();
+  }else{
+    d.els.forEach(el=>{ el.style.transform=''; el.classList.remove('moving','dragging'); });
+  }
+  const moved=[...$('drugs').children].find(c=>c.dataset.id===id);
+  if(moved) moved.scrollIntoView({block:'center'});
+}
+document.addEventListener('pointerup', dragEnd);
+document.addEventListener('pointercancel', dragEnd);
+
 /** 薬剤の並べ替え（▲上へ/▼下へ）。dir=-1で上、+1で下 */
 function moveRow(id, dir){
   const i=rows.findIndex(x=>x.id===id); if(i<0) return;
@@ -1945,6 +2256,27 @@ if(typeof PatientInput !== 'undefined' && PatientInput.attachKarteInput){
   $('karte').addEventListener('input', ()=>onKarteInput());
 }
 
+/* ★電子カルテの💊ボタンから開いたとき（?karte=1234-01）は、その子の処方を始める（2026-11-11）
+   別の子の入力が残っていたら片付ける（処方はコピー/Slack送信の時点で履歴に保存済み）。
+   confirm はiPadの枠内で出ないことがあるので使わない。 */
+(()=>{
+  const q = new URLSearchParams(location.search);
+  const k = q.get('karte');
+  if(!k || !/^\d{4}-\d{2}$/.test(k)) return;
+  if(val('karte') !== k){
+    const had = val('karte');
+    setVal('karte', k); setVal('pname',''); setVal('pweight',''); setVal('pdate', todayStr()); setVal('manualNote','');
+    rows=[blankRow()]; render(); onKarteInput(); persist(); updateRecallBtn();
+    if(had) toast(`${had} の入力を片付けて、${k} の処方を始めます`);
+  }
+  // ★カルテに入れた体重（&w=5.2）があれば、それを体重欄に入れる（2026-11-11）
+  const w = parseFloat(q.get('w'));
+  if(isFinite(w) && w >= 0.05 && w <= 120){
+    setVal('pweight', String(w)); _weightAuto = false; persist(); render();
+    const b = $('wbadge'); if(b){ b.className = 'wbadge ok'; b.textContent = '電子カルテの体重（本日）'; }
+  }
+})();
+
 // 体重の共有は院内（http）でしか使えない。使えない端末では 💾 を出さない
 // （押しても何も起きないボタンを見せない。GitHub Pages版＝https は混在コンテンツで
 //   院内APIを呼べないため、今までとまったく同じ見た目になる）
@@ -1961,7 +2293,10 @@ if(typeof PatientInput === 'undefined' || !PatientInput.saveWeight){
       try{ sessionStorage.setItem('rx_upd','1'); }catch(_){}
       const m = html.match(/APP_VERSION\s*=\s*'([^']+)'/);
       if(m && m[1] && m[1] !== APP_VERSION){
-        location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]));
+        // ★電子カルテから ?karte= 付きで開いた時は、更新後もその子を引き継ぐ（2026-11-11）
+        const _k = new URLSearchParams(location.search).get('karte');
+        const _w = new URLSearchParams(location.search).get('w');
+        location.replace(location.pathname + '?v=' + encodeURIComponent(m[1]) + (_k ? '&karte=' + encodeURIComponent(_k) : '') + (_w ? '&w=' + encodeURIComponent(_w) : ''));
       }
     }).catch(()=>{});
 })();
