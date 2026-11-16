@@ -66,6 +66,9 @@
   @media(max-width:520px){.dosehelp .g{grid-template-columns:1fr 1fr;}}
   .dosehelp .res{margin-top:8px;font-size:14px;color:#1d4ed8;}
 
+  .setbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 0;}
+  .setbar span{font-size:13px;color:var(--muted);font-weight:700;}
+  .setbtn{background:var(--card2);border:1px solid var(--line);color:var(--text);border-radius:999px;padding:8px 16px;font-size:15px;font-weight:700;cursor:pointer;}
   .addbtn{width:100%;background:var(--card2);border:1px dashed var(--line);color:var(--text);
     border-radius:12px;padding:14px;font-size:16px;font-weight:800;margin:4px 0 16px;}
 
@@ -244,6 +247,10 @@
   <div id="drugs"></div>
 
   <button class="addbtn" onclick="addDrug()">＋ 薬剤を追加</button>
+  <div class="setbar"><span>📦 定型セット</span>
+    <button class="setbtn" onclick="addSet('ネブライザー')">ネブライザー</button>
+    <button class="setbtn" onclick="addSet('皮下点滴')">皮下点滴</button>
+  </div>
 
   <div style="display:flex;align-items:center;gap:8px;margin:10px 0 0;flex-wrap:wrap;">
     <span style="font-size:13px;color:var(--muted);font-weight:700;">📅 処方日数を一括</span>
@@ -370,7 +377,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-11-12.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-11-16.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1640,7 +1647,16 @@ function matchDrugs(query, limit){
 function settleIme(then){
   const a=document.activeElement;
   if(a && a!==document.body && typeof a.blur==='function') a.blur();
-  setTimeout(then, 60);
+  // ★電子カルテの中（iframe）だと blur だけでは iPad の変換候補の窓が残った（2026-11-13）
+  //   → 見えない入力欄へ一度フォーカスを移して変換を確定させ、すぐ外して消す
+  try{
+    const d=document.createElement('input');
+    d.readOnly=true; d.setAttribute('aria-hidden','true'); d.tabIndex=-1;
+    d.style.cssText='position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;border:0;padding:0';
+    document.body.appendChild(d); d.focus({preventScroll:true});
+    setTimeout(()=>{ try{ d.blur(); d.remove(); }catch(e){} }, 30);
+  }catch(e){}
+  setTimeout(then, 80);
 }
 /** 薬剤名を決めた時の共通処理（一覧からでも候補からでも同じ） */
 function applyDrugName(r, nameEl, el, name){
@@ -1971,6 +1987,28 @@ function renderBulkStart(){
   box.innerHTML=`<button class="chip chip-none" data-k="">指定なし</button>`
     + STARTS.map(s=>`<button class="chip" data-k="${s.key}">${s.jp}</button>`).join('');
   box.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>applyBulkStart(c.dataset.k)));
+}
+// 定型セット（院長 2026-11-16）：押すと薬がまとめて入る。皮下点滴は数を入れずに（その都度入れる）
+const RX_SETS = {
+  'ネブライザー': [
+    ['ムコフィリン吸入液20％　2ml', '15', '包', '1/2包/回'],
+    ['メプチン吸入液　0.3ml', '30', '個', '1個/回'],
+    ['生理食塩水　細口　500ml', '1', '本', '10-20ml/回'],
+    ['オルガドロン点眼・点耳・点鼻薬0.1%', '1', '本', '5-6滴/回'],
+  ],
+  '皮下点滴': [
+    ['LR 500ml', '', '本', ''],
+    ['皮下点カテーテル', '', '本', ''],
+    ['21G翼状針', '', '本', ''],
+  ],
+};
+function addSet(key){
+  const L = RX_SETS[key]; if(!L) return;
+  // まだ何も書いていない空の行は使わずに消す
+  rows = rows.filter(r => (r.name||'').trim() || (r.dose||'').toString().trim() || (r.qty||'').toString().trim() || (r.usage||'').trim());
+  L.forEach(([name, qty, funit, usage]) => rows.push(Object.assign(blankRow(), { mode:'fixed', name, qty, funit, usage })));
+  render(); persist();
+  if(typeof toast==='function') toast(`${key}のセットを入れました`);
 }
 function addDrug(){ const r=blankRow(); rows.push(r); render(); persist();
   // 追加した薬剤名にフォーカス
