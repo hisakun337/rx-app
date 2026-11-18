@@ -378,7 +378,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-11-18.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-11-19.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1604,10 +1604,7 @@ function renderPreview(){
 let priceNames=[];
 try{ const c=JSON.parse(localStorage.getItem('rx_price_names')||'null'); if(c && Array.isArray(c.names)) priceNames=c.names; }catch(_){}
 (function loadPriceNames(){
-  try{
-    const c=JSON.parse(localStorage.getItem('rx_price_names')||'null');
-    if(c && c.at && Date.now()-c.at < 86400000 && (c.names||[]).length) return;
-  }catch(_){}
+  // 開くたびに取り直す（価格表・サイズ名の追加がすぐ出るように 2026-11-19）。つながらない時は前回の分のまま
   const host=location.hostname || 'cti-pi.local';
   fetch(`http://${host}:8998/suwa/pages/price-rx`, {cache:'no-store'}).then(r=>r.json()).then(d=>{
     if(!d || !Array.isArray(d.names) || !d.names.length) return;
