@@ -378,7 +378,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-11-19.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-11-19.2';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1670,7 +1670,7 @@ function attachAutocomplete(input, list, onPick){
   const show=()=>{
     if(busy) return;
     const v=(input.value||'').trim(); if(!v){ hide(); return; }
-    const m=matchDrugs(v, 30);
+    const m=matchDrugs(v, 300);   // 30件で切っていたので、サイズの多いエリザベスウエアで(NML)などが出なかった（2026-11-19）。多い時は候補をスクロール
     if(!m.length){ cur=[]; list.innerHTML='<div class="ac-new">一覧にない薬です。このまま使えます（コピー・送信すると覚えます）</div>'; list.style.display='block'; return; }
     if(m.length===1 && m[0]===v){ hide(); return; }
     cur=m;
