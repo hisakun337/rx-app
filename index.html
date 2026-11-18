@@ -131,8 +131,9 @@
   .pick-item:active{background:var(--accent);color:#fff;}
   /* 薬剤名を打つと下に出る候補（2026-10-23） */
   .namewrap{position:relative;}
-  .ac-list{display:none;position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:4px;background:#fff;
-    border:1px solid var(--accent);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-height:320px;overflow-y:auto;}
+  .ac-list{display:none;position:absolute;left:0;right:0;top:100%;z-index:40;margin-top:4px;background:#fff;
+    border:1px solid var(--accent);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-height:320px;overflow-y:auto;
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;}
   .ac-item{padding:13px 12px;font-size:16px;border-bottom:1px solid var(--line);}
   .ac-item:last-child{border-bottom:none;}
   .ac-item:active{background:var(--accent);color:#fff;}
@@ -377,7 +378,7 @@
 <script>
 'use strict';
 
-const APP_VERSION = '2026-11-16.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
+const APP_VERSION = '2026-11-18.1';   // ★更新のたびに変える（iPad自動更新の判定に使用）
 // 今日の日付を「日本時間（ローカル）」で YYYY-MM-DD に。toISOString()はUTCなので早朝は前日になるバグを回避
 function todayStr(){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
 
@@ -1667,26 +1668,57 @@ function applyDrugName(r, nameEl, el, name){
 }
 /** 薬剤名の候補（文字入力を邪魔しない・下にタップ候補を出す） */
 function attachAutocomplete(input, list, onPick){
-  let busy=false;
-  const hide=()=>{ list.style.display='none'; list.innerHTML=''; };
+  let busy=false, cur=[], tap=null, inList=false;
+  const hide=()=>{ list.style.display='none'; list.innerHTML=''; cur=[]; };
   const show=()=>{
     if(busy) return;
     const v=(input.value||'').trim(); if(!v){ hide(); return; }
     const m=matchDrugs(v, 30);
-    if(!m.length){ list.innerHTML='<div class="ac-new">一覧にない薬です。このまま使えます（コピー・送信すると覚えます）</div>'; list.style.display='block'; return; }
+    if(!m.length){ cur=[]; list.innerHTML='<div class="ac-new">一覧にない薬です。このまま使えます（コピー・送信すると覚えます）</div>'; list.style.display='block'; return; }
     if(m.length===1 && m[0]===v){ hide(); return; }
+    cur=m;
     list.innerHTML=m.map(n=>`<div class="ac-item">${esc(n)}</div>`).join('');
-    [...list.children].forEach((it,i)=> it.addEventListener('pointerdown', ev=>{
-      ev.preventDefault();
-      const name=m[i]; busy=true; hide();
-      settleIme(()=>{ onPick(name); busy=false; });
-    }));
     list.style.display='block';
+    fitList();
   };
+  // 候補が画面の下（キーボード・はみ出し）に隠れないよう、見えている高さに合わせて縮める（2026-11-18）
+  const fitList=()=>{
+    list.style.maxHeight='';
+    const vh=(window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    const room=vh - list.getBoundingClientRect().top - 8;
+    if(room < 320) list.style.maxHeight=Math.max(150, Math.floor(room))+'px';
+  };
+  /* ★候補は「指を離した時・動かしていなければ」選ぶ（2026-11-18）
+     以前は触れた瞬間に選んでいたので、候補が多い薬（エリザベス・ネクスガード）で候補をスクロールできなかった */
+  list.addEventListener('mousedown', ev=> ev.preventDefault());   // マウスで押しても入力欄から抜けない（候補が消えない）
+  list.addEventListener('pointerdown', ev=>{
+    inList=true;
+    const it=ev.target.closest('.ac-item');
+    tap = it ? {it, x:ev.clientX, y:ev.clientY, top:list.scrollTop} : null;
+  });
+  list.addEventListener('pointermove', ev=>{
+    if(tap && (Math.abs(ev.clientX-tap.x)>8 || Math.abs(ev.clientY-tap.y)>8)) tap=null;
+  });
+  list.addEventListener('pointercancel', ()=>{ tap=null; inList=false; });   // スクロールが始まった
+  list.addEventListener('scroll', ()=>{ tap=null; });
+  list.addEventListener('pointerup', ev=>{
+    inList=false;
+    const t=tap; tap=null;
+    if(!t || Math.abs(list.scrollTop-t.top)>2) return;
+    const i=[...list.children].indexOf(t.it), name=cur[i];
+    if(i<0 || name==null) return;
+    ev.preventDefault();
+    busy=true; hide();
+    settleIme(()=>{ onPick(name); busy=false; });
+  });
   input.addEventListener('input', show);
   input.addEventListener('compositionupdate', ()=> setTimeout(show, 0));
   input.addEventListener('focus', show);
-  input.addEventListener('blur', ()=> setTimeout(hide, 150));
+  input.addEventListener('blur', ()=> setTimeout(()=>{ if(!inList && document.activeElement!==input) hide(); }, 150));
+  // 入力欄から抜けたあとで候補の外を押したら閉じる
+  document.addEventListener('pointerdown', ev=>{
+    if(list.style.display==='block' && !list.contains(ev.target) && ev.target!==input && document.activeElement!==input) hide();
+  });
 }
 
 function copyOut(){
